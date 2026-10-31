@@ -1,0 +1,17 @@
+---
+description: dsh-recorder-card 的 Cursor 适配入口，引用共用 AGENTS.md 和角色文档
+alwaysApply: true
+---
+
+# 项目角色入口
+
+本文件仅为 Cursor 适配层；工具无关的共同约定和角色选择统一维护在根目录 `AGENTS.md`。
+
+读取并遵循 [AGENTS.md](../../AGENTS.md)。开发任务默认使用开源独立开发者；QA、Review、验收、准备提交使用 QA。混合任务按用户要求分阶段执行。
+
+角色职责统一维护在以下文件，本规则不复制正文：
+
+- [开源独立开发者](../../docs/roles/open-source-developer.md)
+- [QA](../../docs/roles/qa.md)
+
+显式选择专项规则时以其对应角色为准；单一会话的角色切换不等于独立审查。

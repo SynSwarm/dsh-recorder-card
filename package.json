@@ -1,0 +1,52 @@
+{
+  "name": "dsh-recorder-card",
+  "version": "0.1.0",
+  "description": "Development-preview DSH plugin for AI recorder cards, with browser BLE control and file-listing code. DSH and hardware verification pending; audio import and transcription integration are planned.",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "recorder",
+    "recording-card",
+    "voice-recorder",
+    "ble",
+    "bluetooth",
+    "audio",
+    "ai-recorder"
+  ],
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check:package": "node scripts/check-package.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "vendor/",
+    "skill/"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-skill": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}
