@@ -4,7 +4,7 @@
 
 **`dsh-recorder-card`** is a third-party **DeepSeek Harness (DSH)** plugin under development for connecting **AI recorder cards** over BLE.
 
-> **Development preview:** the repository contains a plugin skeleton and browser card implementation. Import, transcription, and archive integration are not complete. DSH compatibility and hardware behavior still need verification. Published on npm as `dsh-recorder-card@0.1.0` (development preview).
+> **Development preview:** the repository contains a plugin skeleton and browser card implementation. Import, transcription, and archive integration are not complete. DSH compatibility and hardware behavior still need verification. Published on npm as `dsh-recorder-card` (development preview).
 
 ## Purpose
 
@@ -37,7 +37,7 @@ After a list timeout, write failure, or unconfirmed end response, disconnect and
 There is currently no verified end-user installation procedure documented here.
 
 - **Local development:** follow the candidate DSH loading procedure in [CONTRIBUTING.md](CONTRIBUTING.md), then record the exact runtime version and results.
-- **npm:** published as `dsh-recorder-card@0.1.0`; install spec `dsh plugin add dsh-recorder-card`. End-user installation and activation in DSH have not been verified yet.
+- **npm:** published as `dsh-recorder-card`; install spec `dsh plugin add dsh-recorder-card`. End-user installation and activation in DSH have not been verified yet.
 - **GitHub / Web UI installation:** bundle installation and activation have not been verified. User instructions will follow release acceptance.
 
 ## Development requirements

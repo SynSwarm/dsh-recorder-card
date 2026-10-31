@@ -24,6 +24,7 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Changed
 
+- Remove hard-coded published versions from both READMEs so development-preview installation guidance stays current across patch releases.
 - Reconciled documentation with the recorded npm development-preview release, clarified remaining release acceptance, and replaced an unavailable discoverability reference with an actionable checklist.
 - Made `AGENTS.md` and `docs/roles/` the shared cross-tool entry and role definitions; documented explicit loading and retained `.cursor/rules/` as an optional Cursor adapter.
 - Aligned English and Chinese READMEs with implementation and verification status; replaced unverified end-user installation claims with development guidance.
