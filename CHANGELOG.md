@@ -32,8 +32,6 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Fixed
 
-- Preserve NextProto's full MIT copyright and permission notice in `vendor/LICENSE`, attribute both protocol copies, and require the notice in package preflight checks.
-- Describe the npm package as a development preview with unverified BLE controls/listing and planned import/transcription integration.
 - Honor Skill load cancellation, restrict the provider to its owned locator, and return definitions without discovery-only fields. Removed the empty effect; DSH's Skill registry owns provider disposal.
 - Replace unshipped local Skill documentation links with a packaged runtime reference; align README installation status and default transcription plan with the existing manifest and roadmap decisions.
 - Distinguish file-list idle timeouts from device completion: show a persistent no-response or possibly-incomplete warning and identify confirmed empty lists separately.
@@ -42,6 +40,15 @@ The existing entries below describe completed repository work. Their allocation 
 - Preserve byte offsets and lengths when converting `DataView` and other buffer views in both protocol implementations, allowing browser BLE notifications to be parsed.
 - Keep one active file-list request, bind timeout callbacks to their collector, and clear them on completion, failure, disconnect, or unmount. Incoming list frames extend the UI idle fallback.
 - Clear device-specific UI state on manual or unexpected disconnect; remove listeners, handle connection failures, and invalidate pending connections so stale callbacks cannot update a new session or an unmounted card.
+
+## [0.1.1] - 2026-10-31
+
+### Fixed
+
+- Correct the npm package description, which displayed a README navigation line in `0.1.0`. Describe the plugin as a development preview; audio import and transcription integration remain planned.
+- Include NextProto's complete MIT copyright and permission notice in `vendor/LICENSE`, with attribution in both protocol copies and package preflight enforcement.
+
+DSH loading and hardware compatibility remain unverified; this release does not complete M1 or add the planned Agent tools, browser import, or transcription integration.
 
 ## [0.1.0] — Development preview
 
