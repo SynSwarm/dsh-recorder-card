@@ -75,8 +75,9 @@ async function executeOperation(operation, run) {
 }
 
 // Mirrors @deepseek-ai/dsh-plugin-manager/tools: defineTool + ctx.tools.register.
-// NOTE: the registration scope (host vs agent preset) must be confirmed with
-// `cordis_inspect_query` (Tool) in a cordis-mode session before relying on it.
+// Host registration contributes global tools inherited by agent scopes, subject
+// to their restrictions. Local scope tests cover inheritance/dispatch/filtering;
+// the actual cordis session's effective catalog and presentation still need validation.
 export function registerRecorderTools(ctx, service) {
   const output = processOutput;
 

@@ -10,6 +10,7 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Added
 
+- Verify global recorder tools are inherited by local agent scopes, can dispatch a configuration-only check, and respect preset-scope restrictions. Confirm omitted Config paths/device identifiers remain optional under Schemastery; actual cordis-session presentation remains unverified.
 - Reject truncated or unsupported audio before import publication/transcription by checking RIFF/WAVE PCM structure and whole frames. Preserve independent device cleanup status/errors alongside transcription failures in the version-2 import result.
 
 - Protect imports with private staging and atomic no-replace publication; preserve same-name audio and add a unique suffix on collision. Report imported path/size/SHA-256 and separate transcription success/failure, including a retained-audio retry path. Fix the stale CLI validation status as a dated historical note.

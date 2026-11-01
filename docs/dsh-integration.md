@@ -25,6 +25,18 @@
 
 最终本地测试 tarball 的 SHA-256 为 `f9b20b2b1c48dfc8135a2e7778e7dc823cb7e5ac09edbc29673e6802613696cf`；重新安装该包后六项探针检查通过。自动自检为 Node 51 项、Python 23 项、包清单 14 个文件、本地 Markdown 链接目标 127 个，以及 `git diff --check`，均通过。测试包和原始报告保存在忽略目录，开发源码未提交、未发布。
 
+### Config 与工具作用域补充核对（2026-11-01）
+
+本地 `@deepseek-ai/schemastery` 中，字段只有显式 `.required()` 才要求必填。`Config({})` 可成功解析，`repoRoot`、`deviceAddress` 均保留为缺省；服务层为前者使用 Host 工作目录，并仅在需要设备的操作中校验后者。无需按 Zod 的语义添加 `.optional()`。
+
+本地 `@deepseek-ai/dsh-tools@0.2.0-rc.2` 支持 Host 全局注册，Agent 作用域继承全局工具并应用作用域限制。`node --test tests/tools.test.js` 的 11 项测试通过；新增测试使用真实 Cordis/DSH 注册表与 `createScope`，以测试身份模拟 Agent/preset 作用域，验证：
+
+- 六个工具在 Agent 作用域中可见；受控调用 `recorder_status` 返回 `RECORDER_CONFIG_OR_ARGUMENT`，而非工具不可见错误，没有启动设备操作。
+- 插件卸载后，Agent 作用域也不再看到这些工具。
+- 父级 preset 作用域禁止 `recorder_status` 后，子级不可见且调用返回 `UNKNOWN_TOOL`；全局工具仍保留，解除限制后子级恢复可见。
+
+这是本地注册机制自检，未装载真实 Agent preset 或调用模型，不替代实际 cordis 会话验收。既有 headless 探针只证明 Host 注册及调用。后续应在目标 cordis 会话的实际 Agent 作用域检查六个工具的有效可见集合、作用域限制和呈现模式，再执行一次受控调用；PTC 模式应检查其 SDK 工具集合及相应调用入口，不能仅凭原生工具列表未显示名称判定不可用。官方工具挂在 preset 下本身不构成迁移本插件注册位置的依据。
+
 ### 复现要点
 
 [Host 验证探针](../scripts/dsh-host-probe.mjs)保留在开发目录，不进入 npm 包。它会启停该测试 profile 的插件并结束测试 Host，仅应在专用临时 profile 中执行；探针要求 `config.profileHome` 与环境 `DSH_HOME` 一致，并存在手动建立的 `.recorder-test-profile` 标记。

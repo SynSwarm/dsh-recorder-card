@@ -4,6 +4,7 @@ import { Context } from "@deepseek-ai/cordis";
 import Tools, { TOOL_ABORTED_BEFORE_DISPATCH } from "@deepseek-ai/dsh-tools";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Skills from "@deepseek-ai/dsh-skill";
+import { createScope } from "@deepseek-ai/dsh-scope";
 import * as plugin from "../index.js";
 import { registerRecorderTools } from "../runtime/tools.js";
 
@@ -58,6 +59,47 @@ test("real Cordis/DSH registry loads and disposes the six tools and Skill withou
   await mount(plugin);
   assert.equal(ctx.tools.schemas().length, 6);
   assert.equal((await ctx.skills.list()).length, 1);
+});
+
+test("Host tools are inherited and callable in an agent scope without device access", async (t) => {
+  const { ctx, mount } = await runtime(t);
+  const mounted = await mount(plugin);
+  // Real scope/registry primitives, with an opaque agent identity; no live preset or model.
+  const agent = {};
+  const scope = createScope(ctx, agent);
+  t.after(() => scope.dispose());
+  assert.deepEqual(ctx.tools.schemas(agent).map(tool => tool.name), ctx.tools.schemas().map(tool => tool.name));
+  assert.equal(ctx.tools.schemas(agent).length, 6);
+  const result = await ctx.tools.execute({ callId: "scoped-config-check", agent,
+    name: "recorder_status", arguments: {}, signal: new AbortController().signal });
+  assert.equal(result.isError, true);
+  assert.equal(result.error.info.code, "RECORDER_CONFIG_OR_ARGUMENT");
+  assert.match(result.error.message, /deviceAddress/);
+  await mounted.dispose();
+  assert.equal(ctx.tools.schemas(agent).length, 0);
+});
+
+test("preset scope restrictions filter inherited Host tools without hiding them globally", async (t) => {
+  const { ctx, mount } = await runtime(t);
+  await mount(plugin);
+  const preset = {};
+  const agent = {};
+  let presetScope, agentScope;
+  await mount({ inject: ["tools"], apply(scopedHost) {
+    presetScope = createScope(scopedHost, preset);
+    agentScope = createScope(scopedHost, agent, { parent: preset });
+  } });
+  t.after(async () => { await agentScope.dispose(); await presetScope.dispose(); });
+  const release = presetScope.ctx.tools.restrict({ deny: ["recorder_status"] });
+  assert.equal(ctx.tools.schemas().length, 6);
+  assert.equal(ctx.tools.schemas(agent).length, 5);
+  assert.equal(ctx.tools.get("recorder_status", agent), undefined);
+  const denied = await ctx.tools.execute({ callId: "scoped-denial-check", agent,
+    name: "recorder_status", arguments: {}, signal: new AbortController().signal });
+  assert.equal(denied.isError, true);
+  assert.equal(denied.error.info.code, "UNKNOWN_TOOL");
+  release();
+  assert.equal(ctx.tools.schemas(agent).length, 6);
 });
 
 test("tool schema validation rejects malformed calls before device access", async (t) => {
@@ -166,6 +208,9 @@ test("real tool dispatch reports missing device configuration without spawning",
 });
 
 test("plugin Config validates timeout and path types and preserves configured output", () => {
+  const defaults = plugin.Config({});
+  assert.equal(defaults.repoRoot, undefined);
+  assert.equal(defaults.deviceAddress, undefined);
   assert.equal(plugin.Config({ outDir: "custom-output" }).outDir, "custom-output");
   for (const config of [{ python: 1 }, { deviceAddress: 42 }, { cliTimeoutMs: 0 }, { cliTimeoutMs: 1.5 }]) {
     assert.throws(() => plugin.Config(config));

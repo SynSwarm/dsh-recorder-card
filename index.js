@@ -26,6 +26,8 @@ export const name = "recorder-card";
 export const inject = ["skills", "tools"];
 
 // Configuration uses the same Schemastery contract as DSH 0.2.0-rc.2 plugins.
+// Schemastery fields are optional unless .required() is used. The service supplies
+// repoRoot's fallback and validates deviceAddress only for device-specific calls.
 export const Config = z.object({
   python: z.string().default("python").description("Python interpreter on the DSH Host."),
   repoRoot: z.string().description("Absolute external CLI checkout; defaults to Host working directory."),
