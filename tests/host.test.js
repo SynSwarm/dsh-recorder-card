@@ -68,14 +68,18 @@ test("Skill provider rejects foreign names and filesystem locators", async (t) =
   assert.equal(await provider.get({ ...candidate, locator: resolve(root, "package.json") }), undefined);
 });
 
-test("Skill local references resolve relative to the advertised resource base", async (t) => {
+test("Skill local reference files resolve relative to the resource base, excluding fragments", async (t) => {
   const provider = await providerFixture(t);
   const [candidate] = await provider.list();
   const definition = await provider.get(candidate);
   const links = [...definition.content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]
     .map((match) => match[1]).filter((target) => !/^https?:/.test(target));
   assert.ok(links.length > 0);
-  for (const target of links) await access(resolve(candidate.resourceBase.path, target));
+  for (const target of links) {
+    // A Markdown fragment identifies a section, not part of the filename.
+    const path = target.split("#")[0];
+    await access(path ? resolve(candidate.resourceBase.path, path) : candidate.locator);
+  }
 });
 
 test("Host, Client module and manifest agree on loadable entry points", async () => {

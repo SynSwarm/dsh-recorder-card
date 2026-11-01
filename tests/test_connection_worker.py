@@ -3,10 +3,13 @@ import asyncio
 import io
 import json
 import queue
+import tempfile
+import wave
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime"))
 import recorder_worker as worker
@@ -46,6 +49,64 @@ class ConnectionWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.patcher = patch.object(self.upstream, "import_bleak", return_value=(Client, None))
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
+
+    async def test_named_import_reuses_session_and_publishes_only_selected_audio(self):
+        owner = worker.Worker(self.upstream, lambda _: None)
+        await owner.connect("test")
+        self.addAsyncCleanup(owner.disconnect)
+        session = owner.session
+        audio = io.BytesIO()
+        with wave.open(audio, "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(16000)
+            stream.writeframes(b"\x01\x02" * 20)
+        requested = []
+        async def write(_uuid, data, response):
+            self.assertEqual(len(data), 36)
+            frame = self.upstream.FrameParser().push(data)[0]
+            requested.append(frame.params[4:].rstrip(b"\0").decode())
+            for cmd, body in [(3, b"second.wav"), (4, audio.getvalue()), (5, b"\0")]:
+                session._on_ae22(0, self.upstream.build_frame(bytes([2, cmd]) + body, cmd))
+        Client.instances[0].write_gatt_char = write
+        files = [SimpleNamespace(name="first.wav"), SimpleNamespace(name="second.wav")]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(self.upstream, "read_status", AsyncMock()), \
+                patch.object(worker, "confirmed_list", AsyncMock(return_value=files)):
+            for _ in range(2):
+                result = await owner.operation("importFile", {"filename": "second.wav", "outDir": directory})
+                self.assertEqual(result["cleanup"]["status"], "retained")
+                self.assertEqual(Path(result["imports"][0]["path"]).read_bytes(), audio.getvalue())
+            self.assertEqual(len(list(Path(directory).glob("*.wav"))), 2)
+            for filename in ["missing.wav", "SECOND.WAV", "second", "../second.wav", "first.wav,second.wav"]:
+                with self.assertRaises((RuntimeError, ValueError)):
+                    await owner.operation("importFile", {"filename": filename, "outDir": directory})
+        self.assertEqual(requested, ["second.wav", "second.wav"])
+        self.assertIs(owner.session, session)
+        self.assertEqual(len(Client.instances), 1)
+        self.assertEqual(Client.instances[0].disconnects, 0)
+
+    async def test_import_drop_reports_typed_failure_and_no_published_audio(self):
+        async def interrupted(session, _name, out):
+            (out / "partial.wav").write_bytes(b"partial")
+            client = Client.instances[0]
+            client.is_connected = False
+            client.drop(client)
+            await asyncio.Event().wait()
+        source = io.StringIO('\n'.join(json.dumps(value) for value in [
+            {"id": 1, "method": "connect", "args": {"address": "test"}},
+            {"id": 2, "method": "importFile", "args": {"filename": "test.wav", "outDir": "unused"}}]) + '\n')
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(self.upstream, "read_status", AsyncMock()), \
+                patch.object(worker, "confirmed_list", AsyncMock(return_value=[SimpleNamespace(name="test.wav")])), \
+                patch.object(self.upstream, "import_file", interrupted):
+            source = io.StringIO(source.getvalue().replace('"unused"', json.dumps(directory)))
+            results = []
+            await worker.serve(self.upstream, source, results.append)
+            failed = next(value for value in results if value.get("id") == 2)
+            self.assertEqual(failed["errorCode"], "DEVICE_DISCONNECTED")
+            self.assertNotIn("result", failed)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     async def test_persistent_session_and_drop_callback(self):
         events = []

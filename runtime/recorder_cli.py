@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import importlib.util
 import importlib
@@ -67,6 +68,114 @@ def load_transcriber(repo_root):
 
 class UnconfirmedResponse(RuntimeError):
     """The device may have acted; do not retry blindly on this connection."""
+
+
+class TransferInterrupted(RuntimeError):
+    def __init__(self, message, *, disconnected=False):
+        self.code = "DEVICE_DISCONNECTED" if disconnected else "TRANSFER_INTERRUPTED"
+        super().__init__(message + "; reconnect and explicitly retry this file from the beginning (no resume)")
+
+
+class Diagnostics:
+    """Bounded metadata only. Durations use a monotonic clock; nested stages overlap."""
+
+    def __init__(self, operation, *, clock=time.monotonic):
+        self.clock = clock
+        self.started = clock()
+        self.active = []
+        self.times = {}
+        self.values = {"version": 1, "operation": operation, "phase": "starting", "outcome": "running",
+                       "bytesReceived": 0, "dataFrames": 0, "attempts": 0, "cleanup": "pending"}
+        self.transferring = False
+
+    def elapsed(self):
+        return max(0, round((self.clock() - self.started) * 1000))
+
+    def fail(self, error):
+        self.values.setdefault("failedPhase", self.active[-1][0] if self.active else self.values["phase"])
+        self.values["outcome"] = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+
+    @contextlib.contextmanager
+    def stage(self, name):
+        start = self.clock()
+        self.active.append((name, start))
+        self.values["phase"] = name
+        try:
+            yield
+        except BaseException as error:
+            self.fail(error)
+            raise
+        finally:
+            self.times[name + "Ms"] = self.times.get(name + "Ms", 0) + max(0, round((self.clock() - start) * 1000))
+            self.active.pop()
+            if self.active:
+                self.values["phase"] = self.active[-1][0]
+
+    def frame(self, item):
+        _source, frame = item
+        if not self.transferring or frame.type != 2 or frame.cmd not in (3, 4, 5):
+            return
+        now = self.elapsed()
+        self.values.setdefault("firstFrameMs", now)
+        if frame.cmd == 4:
+            self.values.setdefault("firstDataMs", now)
+            self.values["lastDataMs"] = now
+            self.values["bytesReceived"] += len(frame.params)
+            self.values["dataFrames"] += 1
+        elif frame.cmd == 5:
+            self.values["endFrameMs"] = now
+            self.values["endCode"] = frame.params[0] if frame.params else 3
+            self.transferring = False
+
+    def attach(self, session):
+        """Observe existing writes and parsed-frame enqueue; never consume/reorder frames."""
+        original_write, original_put = session.write_payload, session.events.put_nowait
+        async def write(payload):
+            if payload[:2] != b"\x02\x02":
+                return await original_write(payload)
+            self.values["attempts"] += 1
+            self.transferring = True
+            with self.stage("importWrite"):
+                return await original_write(payload)
+        def put(item):
+            self.frame(item)
+            return original_put(item)
+        session.write_payload, session.events.put_nowait = write, put
+        def restore():
+            session.write_payload, session.events.put_nowait = original_write, original_put
+        return restore
+
+    def finish(self, cleanup):
+        self.values["cleanup"] = cleanup
+        if self.values["outcome"] == "running":
+            self.values["outcome"] = "succeeded"
+        self.values["phase"] = "done" if self.values["outcome"] == "succeeded" else "failed"
+        self.finished = self.elapsed()
+
+    def snapshot(self):
+        result = {**self.values, **self.times, "elapsedMs": getattr(self, "finished", self.elapsed())}
+        for name, start in self.active:
+            result[name + "Ms"] = result.get(name + "Ms", 0) + max(0, round((self.clock() - start) * 1000))
+        return result
+
+
+def diagnostic_stage(trace, name):
+    return trace.stage(name) if trace else contextlib.nullcontext()
+
+
+def select_import_file(files, filename=None):
+    """Select one exact on-card name; never silently fall back to a stem/first match."""
+    if filename is None:
+        if not files:
+            raise RuntimeError("File list empty")
+        return files[0]
+    if (not isinstance(filename, str) or not filename or filename != filename.strip()
+            or any(ord(c) < 32 or c in "/\\," for c in filename)):
+        raise ValueError("filename must be one exact name from recorder_list, without paths or commas")
+    matches = [entry for entry in files if entry.name == filename]
+    if len(matches) != 1:
+        raise RuntimeError("filename is missing or ambiguous; refresh recorder_list and select an exact name")
+    return matches[0]
 
 
 def load_upstream(repo_root: Path):
@@ -241,31 +350,42 @@ def validate_audio(path):
             "sampleRate": pcm[1], "bitsPerSample": pcm[2], "frames": data_size // pcm[3]}
 
 
-async def safe_import_file(original_import, session, list_name, out_dir, report):
+async def safe_import_file(original_import, session, list_name, out_dir, report, trace=None):
     destination = Path(out_dir).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     # Upstream may overwrite its target. Give it a fresh private directory only.
     with tempfile.TemporaryDirectory(prefix=".recorder-import-", dir=destination) as temporary:
         staging = Path(temporary).resolve()
-        staged = Path(await original_import(session, list_name, staging))
-        if staged.is_symlink() or staged.resolve().parent != staging or not staged.is_file():
-            raise RuntimeError("Import did not produce a regular file in its staging directory")
-        size = staged.stat().st_size
-        if size <= 0:
-            raise RuntimeError("Import completed without audio data")
-        integrity = validate_audio(staged)
-        with staged.open("rb+") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            os.fsync(stream.fileno())
+        try:
+            with diagnostic_stage(trace, "transfer"):
+                staged = Path(await original_import(session, list_name, staging))
+        except Exception as error:
+            client = getattr(session, "client", None)
+            disconnected = client is not None and not client.is_connected
+            problem = TransferInterrupted(str(error) or type(error).__name__, disconnected=disconnected)
+            report.data["error"] = {"code": problem.code, "message": str(problem)}
+            report.save()
+            raise problem from error
+        with diagnostic_stage(trace, "validate"):
+            if staged.is_symlink() or staged.resolve().parent != staging or not staged.is_file():
+                raise RuntimeError("Import did not produce a regular file in its staging directory")
+            size = staged.stat().st_size
+            if size <= 0:
+                raise RuntimeError("Import completed without audio data")
+            integrity = validate_audio(staged)
+            with staged.open("rb+") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                os.fsync(stream.fileno())
         target = destination / staged.name
         # Hard-link publication is atomic and never replaces an existing target,
         # including dangling symlinks. No check-then-rename or overwriting fallback.
-        while True:
-            try:
-                os.link(staged, target)
-                break
-            except FileExistsError:
-                target = destination / f"{staged.stem}-{uuid.uuid4().hex}{staged.suffix}"
+        with diagnostic_stage(trace, "publish"):
+            while True:
+                try:
+                    os.link(staged, target)
+                    break
+                except FileExistsError:
+                    target = destination / f"{staged.stem}-{uuid.uuid4().hex}{staged.suffix}"
         report.data["imports"].append({"status": "succeeded", "path": str(target),
                                        "bytes": size, "sha256": digest, "integrity": integrity})
         report.save()
@@ -310,30 +430,53 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
     report = report if report is not None else ImportReport()
     original_session = upstream.Session
     original_run = upstream.run
+    original_targets = upstream.resolve_import_targets
     active = []
+    trace = None
 
     class TrackedSession(original_session):
         def __init__(self):
             super().__init__()
             self._recorder_disconnect_errors = []
+            if trace:
+                trace.attach(self)
             active.append(self)
+
+        async def connect(self, address):
+            with diagnostic_stage(trace, "connect"):
+                return await super().connect(address)
 
         async def disconnect(self):
             # Upstream clears client in finally, even when disconnect fails.
             # Observe the first attempt too: a later no-op cannot prove release.
             try:
-                return await asyncio.wait_for(super().disconnect(), cleanup_timeout)
+                # A second no-op must not inflate or replace the first cleanup stage.
+                with diagnostic_stage(trace if getattr(self, "client", True) else None, "cleanup"):
+                    return await asyncio.wait_for(super().disconnect(), cleanup_timeout)
             except BaseException as error:
                 self._recorder_disconnect_errors.append(error)
                 raise
 
     async def guarded_run(args):
+        nonlocal trace
+        importing = any(getattr(args, key, None) for key in ("import_first", "import_all", "filename"))
+        trace = Diagnostics("import" if importing else "cli")
+        async def pulse():
+            while True:
+                report.data["diagnostics"] = trace.snapshot()
+                try:
+                    report.save()
+                except OSError:
+                    pass  # Diagnostic sampling must not cancel a device operation.
+                await asyncio.sleep(1)
         report.data["cleanup"] = {"status": "pending", "errors": []}
         report.save()
+        heartbeat = asyncio.create_task(pulse())
         primary = None
         try:
             return await asyncio.wait_for(original_run(args), operation_timeout)
         except BaseException as error:
+            trace.fail(error)
             primary = error
             raise
         finally:
@@ -357,6 +500,12 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
             active.clear()
             report.data["cleanup"] = {"status": "unconfirmed" if cleanup_errors else ("succeeded" if had_sessions else "not-needed"),
                                       "errors": cleanup_errors}
+            if cleanup_error is not None:
+                trace.fail(cleanup_error)
+            trace.finish(report.data["cleanup"]["status"])
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+            report.data["diagnostics"] = trace.snapshot()
             try:
                 report.save()
             except OSError:
@@ -368,10 +517,31 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
 
     if hasattr(upstream, "import_file"):
         original_import = upstream.import_file
-        upstream.import_file = lambda session, name, out: safe_import_file(original_import, session, name, out, report)
+        upstream.import_file = lambda session, name, out: safe_import_file(original_import, session, name, out, report, trace)
+    if hasattr(upstream, "read_status"):
+        original_status = upstream.read_status
+        async def status(session):
+            with diagnostic_stage(trace, "status"):
+                return await original_status(session)
+        upstream.read_status = status
+    if hasattr(upstream, "scan_devices"):
+        original_scan = upstream.scan_devices
+        async def scan():
+            with diagnostic_stage(trace, "scan"):
+                return await original_scan()
+        upstream.scan_devices = scan
     upstream.run_transcribe_after_import = lambda path, args: checked_transcription(upstream, path, args, report)
     upstream.Session = TrackedSession
-    upstream.list_files = lambda session: confirmed_list(upstream, session)
+    def exact_targets(files, args):
+        names = upstream.normalize_filename_args(getattr(args, "filename", None))
+        if names:
+            return [select_import_file(files, name).name for name in names]
+        return original_targets(files, args)
+    upstream.resolve_import_targets = exact_targets
+    async def listing(session):
+        with diagnostic_stage(trace, "list"):
+            return await confirmed_list(upstream, session)
+    upstream.list_files = listing
     upstream.send_record_command = lambda session, action: confirmed_record(upstream, session, action)
     upstream.run = guarded_run
 

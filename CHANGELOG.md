@@ -4,6 +4,15 @@ Record completed repository changes here. Future work and acceptance criteria li
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbering follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Version `0.1.0` is recorded as an npm development-preview release; publication does not establish DSH or hardware compatibility.
 
+## [Unreleased]
+
+- Add bounded transfer diagnostics for persistent operations and one-shot imports: stage durations, parsed data-frame/byte counters, first/last/end notification timing, queue wait and snapshot age. Preserve progress through timeout/cancellation and cleanup failures, carry it across Agent/Remote contracts, and atomically save the latest diagnostic under Host dataDir without audio, filenames or device identifiers. Offline coverage only; no new hardware acceptance claimed.
+- Separate roadmap implementation, offline checks, hardware acceptance and release status; prioritize non-first import, transfer diagnostics and recovery. Retain recording-control compatibility requirements and add CI/upgrade configuration checks; align contributor guidance with the current shared Host workflow.
+- Add exact on-card `filename` selection to `recorder_import` and a matching `importFile` Remote method; preserve default first-file import and staged, non-overwriting PCM publication. Named imports reuse the persistent Host session, including optional transcription.
+- Distinguish observed disconnections from interrupted transfers with stable Agent/Remote error codes, retaining cleanup warnings. Recovery remains explicit reconnect and whole-file retry; byte resume and automatic batch recovery are not implemented.
+- Document user-reported hardware workflow success, remaining transfer reliability work, and profile configuration checks before/after upgrades.
+- Verify named import through a real isolated DSH Host Agent tool, complete WAV/hash integrity, retained connection and subsequent listing; the selected test file was first in the list, so non-first hardware acceptance remains pending. Clarify the protocol's 20-byte list-name truncation in Agent guidance.
+
 ## [0.4.0] - 2026-11-01
 
 - Replace the expanding toolbar card with one connection icon and scoped conversation guidance, preserving composer drafts. Keep import, recording and transcription behind explicit conversation requests; expose disconnect/switch in a compact context menu.

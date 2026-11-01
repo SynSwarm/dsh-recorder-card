@@ -8,12 +8,28 @@ import { Service } from "@deepseek-ai/cordis";
 import { createRecorderService } from "./host-cli.js";
 import { createDeviceSettings } from "./device-settings.js";
 import { createTranscriber } from "./transcription.js";
+import { mkdir, writeFile, rename, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export class RecorderService extends Service {
   constructor(ctx, config = {}) {
     super(ctx, "recorder");
     const current = { ...config };
-    this.cli = createRecorderService(current);
+    this.diagnosticWrites = Promise.resolve();
+    this.cli = createRecorderService(current, { onDiagnostic: diagnostics => {
+      const save = this.diagnosticWrites.catch(() => {}).then(async () => {
+        const directory = this.cli.dataDir;
+        await mkdir(directory, { recursive: true });
+        const temporary = join(directory, `.recorder-diagnostics-${randomUUID()}.tmp`);
+        try {
+          await writeFile(temporary, JSON.stringify({ recordedAt: new Date().toISOString(), diagnostics }, null, 2), { flag: "wx", mode: 0o600 });
+          await rename(temporary, join(directory, "recorder-diagnostics.json"));
+        } finally { await rm(temporary, { force: true }); }
+      });
+      this.diagnosticWrites = save;
+      return save;
+    } });
     this.settings = createDeviceSettings(this.cli.dataDir, current);
     let speech;
     ctx.inject(["speechToText"], child => {
@@ -25,6 +41,7 @@ export class RecorderService extends Service {
       getSpeech: () => speech });
     ctx.effect(() => async () => {
       await Promise.all([this.cli.dispose(), this.settings.dispose(), this.transcription.dispose()]);
+      await this.diagnosticWrites.catch(() => {});
     }, "recorder-card: CLI and settings cancellation");
   }
 
@@ -49,12 +66,16 @@ export class RecorderService extends Service {
   async list(options) { await this.getDevice(options); return this.cli.list(options); }
   async recordState(options) { await this.getDevice(options); return this.cli.recordState(options); }
   async record(action, options) { await this.getDevice(options); return this.cli.record(action, options); }
-  async importFirst(outDir, transcribe = false, options) {
+  importFirst(outDir, transcribe = false, options) {
+    return this.importFile(undefined, outDir, transcribe, options);
+  }
+  async importFile(filename, outDir, transcribe = false, options) {
     if (typeof transcribe !== "boolean") throw new TypeError("transcribe must be boolean");
     await this.getDevice(options);
     // Import finishes before ASR. An explicitly connected session remains owned
     // by Host (cleanup=retained); a one-shot CLI operation releases BLE.
-    const result = await this.cli.importFirst(outDir, false, options);
+    const result = filename === undefined ? await this.cli.importFirst(outDir, false, options)
+      : await this.cli.importFile(filename, outDir, false, options);
     if (!transcribe) return result;
     try {
       const transcript = await this.transcribe(result.import.path, options);

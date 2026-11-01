@@ -31,6 +31,8 @@
 
 ## BLE 连接归属
 
+工作区新增 `recorder_import.filename` 与 `RecorderService.importFile` / Remote `importFile`。同一持久 worker 内先确认列表、精确选择文件再导入，省略文件名保持首条行为；转写后仍保留 Host 连接。未连接时使用独立 `--filename=<name>` 参数调用一次性适配器，不能与 `--import-all` 混用。没有为工具导入增加断开交接事务，也未实现字节续传或自动重连。错误分类、用户实机反馈和 profile 升级核对见[导入与恢复](import-recovery.md)。
+
 当前卡片与 Agent 工具均通过 Host 队列，不会创建额外浏览器 BLE 连接。手机、其他浏览器直连页面和外部 CLI 仍需先断开，避免抢占设备。
 
 Host 的 [CLI 管理层](../runtime/host-cli.js)在同一个加载模块内共享单一设备队列。显式连接时复用持续 worker；未显式连接时保留每次调用独立 Python 子进程的路径。只有进程及输出管道关闭、终止尝试结束后才释放全局队列。排队中取消不会启动进程；失败不会自动重试录音命令。独立转写不占用 BLE 队列，但纳入同一实例的停用清理。

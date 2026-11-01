@@ -14,6 +14,31 @@ const partial = {
   cleanup: { status: "unconfirmed", errors: [{ code: "disconnect-failed", message: "release unconfirmed" }] },
 };
 
+test("named Remote import validates arguments, stages, cancellation and failure codes", async t => {
+  let problem;
+  const { client, host } = await remoteRuntime(t, {
+    importFile: async (filename, outDir, transcribe, { signal }) => {
+      assert.equal(filename, "second.wav"); assert.equal(outDir, "audio"); assert.equal(transcribe, true);
+      assert.ok(signal instanceof AbortSignal);
+      if (problem) throw Object.assign(new Error("Reconnect and retry from the beginning"), { name: problem });
+      return { ...partial, status: "succeeded", cleanup: { status: "retained", errors: [] }, transcription: { ...transcriptResult, exitCode: 0 } };
+    },
+  });
+  const remote = client.remote.recorder;
+  const result = await remote.importFile("second.wav", { outDir: "audio", transcribe: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.transcription.audioSha256, transcriptResult.audioSha256);
+  assert.equal(result.value.cleanup.status, "retained");
+  for (const args of [{ filename: 1 }, { filename: "" }, { filename: "second.wav", options: { transcribe: 1 } }]) {
+    assert.equal((await host.typertGateway.dispatchRpc("recorder/importFile", { args })).ok, false);
+  }
+  for (const [name, code] of [["DeviceDisconnectedError", "recorder/device-disconnected"], ["TransferInterruptedError", "recorder/transfer-interrupted"]]) {
+    problem = name;
+    const failed = await remote.importFile("second.wav", { outDir: "audio", transcribe: true });
+    assert.equal(failed.ok, false); assert.equal(failed.error.code, code);
+  }
+});
+
 test("connection Remote preserves selection and retained import results through real codecs", async t => {
   const selection = { status: "selection-required", name: "", devices: [{ address: "test", name: "test" }] };
   const { client } = await remoteRuntime(t, {
@@ -47,7 +72,7 @@ test("official Client and Host Gateways dispatch all six methods and preserve pa
   const service = Object.fromEntries(["scan", "status", "list", "recordState", "record", "importFirst", "transcribe"]
     .map(name => [name, async (...args) => { received.push([name, args]); return name === "importFirst" ? partial : name === "transcribe" ? transcriptResult : processResult; }]));
   const { host, client } = await remoteRuntime(t, service);
-  assert.deepEqual(remoteMethods(host.recorderController).map(x => x.method).sort(), ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"].sort());
+  assert.deepEqual(remoteMethods(host.recorderController).map(x => x.method).sort(), ["scan", "status", "list", "record", "importFirst", "importFile", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"].sort());
   const remote = client.remote.recorder;
   const signal = new AbortController().signal;
   for (const name of ["scan", "status", "list"]) assert.equal((await remote[name](signal)).ok, true);

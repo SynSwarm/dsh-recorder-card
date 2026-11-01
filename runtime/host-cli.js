@@ -1,9 +1,12 @@
 import { spawn, execFile } from "node:child_process";
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "./connection.js";
+import { createRecorderContract } from "./remote-contract.js";
+
+const { parseDiagnostics } = createRecorderContract();
 
 const DEFAULT_TIMEOUT_MS = 190_000; // Adapter: 180 seconds + disconnect/startup allowance.
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -181,10 +184,11 @@ function importOutcome(report, outDir, requested) {
     errors: [{ code: "DEVICE_CLEANUP_UNCONFIRMED", message: "Device connection release is unconfirmed; inspect the device before another BLE operation" },
       ...(Array.isArray(cleanup?.errors) ? cleanup.errors.filter(error => typeof error?.code === "string" && typeof error?.message === "string") : [])],
   };
-  return { status: transcription.status === "failed" || !confirmedCleanup ? "partial" : "succeeded", import: audio, transcription, cleanup: cleanupResult };
+  return { status: transcription.status === "failed" || !confirmedCleanup ? "partial" : "succeeded", import: audio, transcription, cleanup: cleanupResult,
+    ...(report.diagnostics ? { diagnostics: parseDiagnostics(report.diagnostics) } : {}) };
 }
 
-export function createRecorderService(config = {}, { execute = runProcess, openConnection = createConnection } = {}) {
+export function createRecorderService(config = {}, { execute = runProcess, openConnection = createConnection, onDiagnostic } = {}) {
   const python = text(config.python ?? "python", "python");
   const bundledRoot = fileURLToPath(new URL("../vendor/upstream/", import.meta.url));
   const repoRoot = resolve(text(config.repoRoot === "" ? bundledRoot : config.repoRoot ?? bundledRoot, "repoRoot"));
@@ -207,6 +211,19 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
   let connection, connecting, lease, connectionControl;
   let connectionState = { status: "disconnected", name: "" };
   let notifiedCleanupEpoch = 0;
+  async function observe(value) {
+    if (value?.diagnostics) {
+      try { value.diagnostics = parseDiagnostics(value.diagnostics); }
+      catch { delete value.diagnostics; return value; }
+      try { await onDiagnostic?.(value.diagnostics); }
+      catch (error) { console.warn("Recorder diagnostics could not be saved:", error.code || error.name); }
+    }
+    return value;
+  }
+  async function capture(promise) {
+    try { return await observe(await promise); }
+    catch (error) { await observe(error); throw error; }
+  }
   // A cleanup warning must reach every affected caller before more BLE work.
   // Capture at submission: all requests already queued before notification fail,
   // rather than silently executing after the first rejected request in a batch.
@@ -228,7 +245,11 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
   function run(script, args, options = {}, device = true) {
     const signal = options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal;
     if (signal.aborted) return Promise.reject(cancelled());
-    const invoke = () => execute(python, ["-B", script, ...args], { cwd: repoRoot, signal, timeoutMs });
+    const submitted = performance.now();
+    const invoke = () => {
+      options.onDispatch?.(Math.max(0, Math.round(performance.now() - submitted)));
+      return execute(python, ["-B", script, ...args], { cwd: repoRoot, signal, timeoutMs });
+    };
     const promise = device ? queueDevice(invoke, signal) : Promise.resolve().then(() => {
       if (signal.aborted) throw cancelled();
       return invoke();
@@ -245,15 +266,15 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
     return promise;
   }
   const bringup = (args, options, adapterArgs = []) => run(adapter, ["--repo-root", repoRoot, "--data-dir", dataDir, ...adapterArgs, "--", ...args], options);
-  const connectedCall = (method, args, options = {}) => connection.request(method, args,
-    { signal: options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal });
+  const connectedCall = (method, args, options = {}) => capture(connection.request(method, args,
+    { signal: options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal }));
   async function release() {
-    await connection?.dispose();
+    const released = await capture(Promise.resolve().then(() => connection?.dispose()));
     try { await lease; }
     catch (error) { if (!["AbortError", "CleanupError"].includes(error.name)) throw error; }
     finally { lease = undefined; }
     if (connectionState.status !== "cleanup-unconfirmed") connectionState = { status: "disconnected", name: "" };
-    return connectionState;
+    return { ...connectionState, ...(released?.diagnostics ? { diagnostics: released.diagnostics } : {}) };
   }
   async function disconnect() {
     connectionControl?.abort();
@@ -275,7 +296,9 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
         let accept, reject;
         const result = new Promise((yes, no) => { accept = yes; reject = no; });
         connectionState = { status: "connecting", name: "" };
+        const submitted = performance.now();
         lease = queueDevice(async () => {
+          const queueMs = Math.max(0, Math.round(performance.now() - submitted));
           let reportedCleanup = false;
           const worker = connection = openConnection({ python, cwd: repoRoot, timeoutMs, terminate: terminateTree,
             args: ["-B", fileURLToPath(new URL("./recorder_worker.py", import.meta.url)), "--repo-root", repoRoot, "--data-dir", dataDir],
@@ -289,7 +312,10 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
               } else if (!reportedCleanup) connectionState = state;
             } });
           try {
-            const state = await worker.request("connect", { address: config.deviceAddress || "" }, { signal });
+            const state = await capture(worker.request("connect", { address: config.deviceAddress || "" }, { signal }).then(value => {
+              if (value.diagnostics) value.diagnostics.queueMs = (value.diagnostics.queueMs || 0) + queueMs;
+              return value;
+            }));
             if (!reportedCleanup) connectionState = state;
             if (state.status === "connected" && !reportedCleanup) cleanupNotice = undefined;
             accept(state);
@@ -322,24 +348,56 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
       if (connection) return connectedCall("record", { action }, options);
       return bringup(deviceArgs("--record", action), options);
     },
-    async importFirst(outDir = config.outDir ?? "archive/audio", transcribeFlag = false, options) {
+    importFirst(outDir, transcribeFlag = false, options) {
+      return this.importFile(undefined, outDir, transcribeFlag, options);
+    },
+    async importFile(filename, outDir = config.outDir ?? "archive/audio", transcribeFlag = false, options) {
+      if (filename !== undefined && (typeof filename !== "string" || !filename || filename !== filename.trim() || /[\x00-\x1f/\\,]/.test(filename))) {
+        throw new TypeError("filename must be one exact name from recorder_list, without paths or commas");
+      }
       if (connecting) await connecting;
       if (typeof transcribeFlag !== "boolean") throw new TypeError("transcribeFlag must be boolean");
       const destination = outsideSource(resolve(dataDir, text(outDir, "outDir")));
-      if (connection && !transcribeFlag) return importOutcome(await connectedCall("importFirst", { outDir: destination }, options), destination, false);
+      if (connection && !transcribeFlag) return importOutcome(await connectedCall(filename === undefined ? "importFirst" : "importFile",
+        { outDir: destination, ...(filename === undefined ? {} : { filename }) }, options), destination, false);
       if (connection) await disconnect();
-      const args = deviceArgs("--import-first", "--out", destination);
+      const args = deviceArgs(...(filename === undefined ? ["--import-first"] : [`--filename=${filename}`]), "--out", destination);
       if (transcribeFlag) args.push("--transcribe");
       const reportDir = await mkdtemp(join(tmpdir(), "recorder-result-"));
       const reportPath = join(reportDir, "result.json");
+      let report, queueMs, submitted = performance.now();
       try {
         let processError;
-        try { await bringup(args, options, ["--result-file", reportPath]); }
+        try { await bringup(args, { ...options, onDispatch: value => { queueMs = value; } }, ["--result-file", reportPath]); }
         catch (error) { processError = error; }
         let outcome;
-        try { outcome = importOutcome(JSON.parse(await readFile(reportPath, "utf8")), destination, transcribeFlag); }
+        try {
+          report = JSON.parse(await readFile(reportPath, "utf8"));
+          if (report.diagnostics) {
+            const info = await stat(reportPath);
+            report.diagnostics = parseDiagnostics({ ...report.diagnostics, queueMs: queueMs ?? 0,
+              snapshotAgeMs: Math.max(0, Math.round(Date.now() - info.mtimeMs)) });
+            if (processError) {
+              if (report.diagnostics.outcome === "running") {
+                report.diagnostics = { ...report.diagnostics, failedPhase: report.diagnostics.phase,
+                  outcome: processError.name === "AbortError" ? "cancelled" : "failed", cleanup: "unconfirmed" };
+              }
+              processError.diagnostics = report.diagnostics;
+            }
+          }
+          outcome = importOutcome(report, destination, transcribeFlag);
+        }
         catch (error) {
           if (processError) {
+            const name = { DEVICE_DISCONNECTED: "DeviceDisconnectedError", TRANSFER_INTERRUPTED: "TransferInterruptedError" }[report?.error?.code];
+            if (processError.name === "CliExitError" && name && typeof report.error.message === "string") {
+              if (report.cleanup?.status !== "succeeded") {
+                const details = Array.isArray(report.cleanup?.errors) ? report.cleanup.errors
+                  .filter(item => typeof item?.message === "string").map(item => item.message).join("; ") : "";
+                throw failure("CleanupError", `${report.error.message}; connection release is unconfirmed; inspect device before retrying${details ? `; ${details}` : ""}`, { cause: processError, diagnostics: processError.diagnostics });
+              }
+              throw failure(name, report.error.message, { cause: processError, diagnostics: processError.diagnostics });
+            }
             if (error.audioPath) processError.message += `; imported audio retained at ${error.audioPath}`;
             throw processError;
           }
@@ -351,7 +409,15 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
           if (outcome.cleanup.status === "unconfirmed") processError.message += "; device connection release is unconfirmed";
           throw processError;
         }
-        return outcome;
+        return await observe(outcome);
+      } catch (error) {
+        if (!error.diagnostics && report?.diagnostics) error.diagnostics = report.diagnostics;
+        error.diagnostics ??= { version: 1, operation: "import", phase: queueMs === undefined ? "queued" : "starting",
+          outcome: error.name === "AbortError" ? "cancelled" : "failed", elapsedMs: queueMs === undefined ? 0 : Math.max(0, Math.round(performance.now() - submitted) - queueMs),
+          queueMs: queueMs ?? Math.max(0, Math.round(performance.now() - submitted)), bytesReceived: 0, dataFrames: 0, attempts: 0,
+          cleanup: queueMs === undefined ? "not-needed" : "unconfirmed" };
+        await observe(error);
+        throw error;
       } finally {
         await rm(reportDir, { recursive: true, force: true });
       }

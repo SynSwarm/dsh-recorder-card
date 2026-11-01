@@ -1,4 +1,7 @@
 import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+import { createRecorderContract } from "./remote-contract.js";
+
+const { parseDiagnostics } = createRecorderContract();
 
 const initializers = [];
 const codes = {
@@ -8,6 +11,7 @@ const codes = {
   CleanupError: "recorder/cleanup-failed", ImportResultError: "recorder/import-result-invalid",
   SettingsError: "recorder/settings-failed",
   TranscriptionError: "recorder/transcription-failed",
+  DeviceDisconnectedError: "recorder/device-disconnected", TransferInterruptedError: "recorder/transfer-interrupted",
 };
 async function call(operation, run) {
   try { return await run(); }
@@ -15,7 +19,8 @@ async function call(operation, run) {
     const code = codes[error.name];
     if (!code) throw error;
     const diagnostic = error.name === "CliExitError" && error.err ? `: ${error.err.slice(-2048)}` : "";
-    throw new RemoteError(code, `${operation}: ${error.message}${diagnostic}`, { operation }, { cause: error });
+    throw new RemoteError(code, `${operation}: ${error.message}${diagnostic}`, { operation,
+      ...(error.diagnostics ? { diagnostics: parseDiagnostics(error.diagnostics) } : {}) }, { cause: error });
   }
 }
 
@@ -40,12 +45,15 @@ export default class RecorderController extends TypertRemoteService {
   importFirst(options, signal) {
     return call("importFirst", () => this.ctx.recorder.importFirst(options?.outDir, options?.transcribe, { signal }));
   }
+  importFile(filename, options, signal) {
+    return call("importFile", () => this.ctx.recorder.importFile(filename, options?.outDir, options?.transcribe, { signal }));
+  }
   transcribe(file, force, signal) { return call("transcribe", () => this.ctx.recorder.transcribe(file, { force, signal })); }
 }
 
 // Apply the public stage-3 decorator contract in plain JS; no transpiler helpers
 // or private metadata keys. These initializers run after super(), as in TS output.
-for (const name of ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"]) {
+for (const name of ["scan", "status", "list", "record", "importFirst", "importFile", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"]) {
   Remote(RecorderController.prototype[name], {
     kind: "method", name, static: false, private: false,
     addInitializer: fn => initializers.push(fn),

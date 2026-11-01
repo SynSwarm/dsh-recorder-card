@@ -58,6 +58,7 @@ class Session:
 def upstream():
     return SimpleNamespace(
         Session=Session,
+        resolve_import_targets=lambda files, args: [],
         cmd_list_files=lambda: b"list",
         parse_file_list=lambda value: ["entry"] * int.from_bytes(value[:4], "big"),
         cmd_start_recording=lambda: b"start",
@@ -68,6 +69,34 @@ def upstream():
 
 
 class ConfirmationTests(unittest.IsolatedAsyncioTestCase):
+    def test_pinned_filename_selection_is_exact_and_does_not_import_all(self):
+        module = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        adapter.install_guards(module)
+        files = [SimpleNamespace(name="first.wav"), SimpleNamespace(name="second.wav")]
+        args = SimpleNamespace(filename=["second.wav"], import_all=False, import_first=False)
+        self.assertEqual(module.resolve_import_targets(files, args), ["second.wav"])
+        for value in ["second", "SECOND.WAV", "missing.wav"]:
+            args.filename = [value]
+            with self.assertRaises(RuntimeError):
+                module.resolve_import_targets(files, args)
+
+    async def test_transfer_failure_report_distinguishes_connected_from_disconnected(self):
+        for connected, code in [(True, "TRANSFER_INTERRUPTED"), (False, "DEVICE_DISCONNECTED")]:
+            with self.subTest(connected=connected), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                session = SimpleNamespace(client=SimpleNamespace(is_connected=connected))
+                report = adapter.ImportReport(root / "result.json")
+                async def transfer(_session, _name, out):
+                    (out / "test.wav").write_bytes(b"partial")
+                    raise RuntimeError("simulated incomplete transfer")
+                with self.assertRaises(adapter.TransferInterrupted):
+                    await adapter.safe_import_file(transfer, session, "test.wav", root, report)
+                saved = json.loads(report.path.read_text(encoding="utf-8"))
+                self.assertEqual(saved["error"]["code"], code)
+                self.assertIn("from the beginning", saved["error"]["message"])
+                self.assertEqual(saved["imports"], [])
+                self.assertEqual(list(root.iterdir()), [report.path])
+
     async def test_empty_list_requires_success_end(self):
         result = await adapter.confirmed_list(upstream(), Session(frame(2, 18, b"\0")))
         self.assertEqual(result, [])

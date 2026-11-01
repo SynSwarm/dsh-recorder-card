@@ -71,6 +71,29 @@ test("Agent can choose a discovered card and disconnect through validated tool r
   assert.deepEqual(calls, [undefined, "test-id"]);
 });
 
+test("named import dispatches the exact filename and preserves typed recovery errors", async t => {
+  const { service } = stub();
+  let failure;
+  service.importFile = async (filename, outDir, transcribe, options) => {
+    assert.equal(filename, "second.wav");
+    assert.equal(outDir, "audio");
+    assert.equal(transcribe, true);
+    assert.ok(options.signal instanceof AbortSignal);
+    if (failure) throw Object.assign(new Error("Reconnect then retry this file from the beginning"), { name: failure });
+    return service.importFirst(outDir, transcribe, options);
+  };
+  const { execute } = await runtime(t, service);
+  const args = { filename: "second.wav", outDir: "audio", transcribe: true };
+  assert.equal((await execute("recorder_import", args)).value.transcription.status, "succeeded");
+  for (const [name, code] of [["DeviceDisconnectedError", "RECORDER_DEVICE_DISCONNECTED"], ["TransferInterruptedError", "RECORDER_TRANSFER_INTERRUPTED"]]) {
+    failure = name;
+    const result = await execute("recorder_import", args);
+    assert.equal(result.isError, true);
+    assert.equal(result.error.info.code, code);
+    assert.match(result.error.message, /from the beginning/);
+  }
+});
+
 test("real Cordis/DSH registry loads and disposes the eight tools and Skill without duplicates", async (t) => {
   const { ctx, mount } = await runtime(t);
   const first = await mount(plugin);

@@ -5,8 +5,60 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "../runtime/connection.js";
 import { createRecorderService } from "../runtime/host-cli.js";
+import RecorderService from "../runtime/service.js";
+import { join } from "node:path";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("named import and transcription reuse the held Host connection without one-shot handoff", async t => {
+  const calls = [], connected = { status: "connected", name: "test", address: "test" };
+  let releases = 0;
+  const cli = createRecorderService({ deviceAddress: "test" }, {
+    execute: async () => { assert.fail("must not spawn a one-shot CLI while connected"); },
+    openConnection: () => {
+      let close;
+      return { closed: new Promise(resolve => { close = resolve; }),
+        dispose: async () => { releases++; close(); },
+        request: async (method, args) => {
+          calls.push([method, args]);
+          if (method === "connect") return connected;
+          return { version: 2, imports: [{ status: "succeeded", path: join(args.outDir, "saved.wav"), bytes: 48,
+            sha256: "a".repeat(64), integrity: { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 } }],
+            transcriptions: [], cleanup: { status: "retained", errors: [] } };
+        } };
+    },
+  });
+  t.after(() => cli.dispose());
+  const owner = { cli, getDevice: async () => {}, transcribe: async path => {
+    assert.equal(releases, 0);
+    return { status: "succeeded", provider: "dsh", path: "archive.md", audioPath: path };
+  } };
+  await cli.connect();
+  for (const name of ["second.wav", "third.wav"]) {
+    const value = await RecorderService.prototype.importFile.call(owner, name, undefined, true);
+    assert.equal(value.status, "succeeded");
+    assert.equal(value.cleanup.status, "retained");
+    assert.equal(value.transcription.provider, "dsh");
+  }
+  assert.equal(releases, 0);
+  assert.deepEqual(calls.map(([method, args]) => [method, args.filename]), [["connect", undefined], ["importFile", "second.wav"], ["importFile", "third.wav"]]);
+});
+
+test("worker transfer errors retain distinct codes and cleanup failures take priority", async () => {
+  for (const [errorCode, cleanupError, name] of [
+    ["DEVICE_DISCONNECTED", null, "DeviceDisconnectedError"],
+    ["TRANSFER_INTERRUPTED", null, "TransferInterruptedError"],
+    ["TRANSFER_INTERRUPTED", "release failed", "CleanupError"],
+  ]) {
+    const { connection, sent, reply, child } = transport();
+    const pending = connection.request("importFile", { filename: "test.wav" });
+    const rejected = assert.rejects(pending, { name });
+    await tick();
+    reply({ id: sent[0].id, error: "transfer incomplete", errorCode, cleanupError });
+    await rejected;
+    child.emit("close", 0); await connection.closed;
+  }
+});
 function transport() {
   const child = new EventEmitter();
   Object.assign(child, { pid: 123, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });

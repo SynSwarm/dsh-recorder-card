@@ -12,6 +12,41 @@ import { Context } from "@deepseek-ai/cordis";
 const integrity = { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 };
 const cleanup = { status: "succeeded", errors: [] };
 
+test("named one-shot import passes one literal filename and rejects paths/batches before spawn", async t => {
+  const dataDir = await temp(t), calls = [];
+  const service = createRecorderService({ dataDir, deviceAddress: "test" }, { execute: async (_cmd, args) => {
+    calls.push(args);
+    await writeImportReport(args);
+    return { code: 0, out: "", err: "" };
+  } });
+  t.after(() => service.dispose());
+  const result = await service.importFile("--second file.wav", dataDir);
+  assert.equal(result.status, "succeeded");
+  assert.ok(calls[0].includes("--filename=--second file.wav"));
+  assert.ok(!calls[0].includes("--import-all") && !calls[0].includes("--import-first"));
+  for (const filename of ["", " first.wav", "a,b", "../test.wav", "sub\\test.wav", 42, "test\0.wav"]) {
+    await assert.rejects(service.importFile(filename), { name: "TypeError" });
+  }
+  assert.equal(calls.length, 1);
+});
+
+test("one-shot import keeps typed transfer failures and prioritizes unconfirmed cleanup", async t => {
+  const dataDir = await temp(t);
+  let code = "TRANSFER_INTERRUPTED", cleanupStatus = "succeeded";
+  const service = createRecorderService({ dataDir, deviceAddress: "test" }, { execute: async (_cmd, args) => {
+    await writeFile(args[args.indexOf("--result-file") + 1], JSON.stringify({ version: 2, imports: [], transcriptions: [],
+      error: { code, message: "Transfer incomplete; reconnect and retry from the beginning" },
+      cleanup: { status: cleanupStatus, errors: cleanupStatus === "unconfirmed" ? [{ code: "DEVICE_CLEANUP_FAILED", message: "first disconnect failed" }] : [] } }));
+    throw Object.assign(new Error("exit 1"), { name: "CliExitError" });
+  } });
+  t.after(() => service.dispose());
+  await assert.rejects(service.importFile("test.wav"), { name: "TransferInterruptedError" });
+  code = "DEVICE_DISCONNECTED";
+  await assert.rejects(service.importFile("test.wav"), { name: "DeviceDisconnectedError" });
+  cleanupStatus = "unconfirmed";
+  await assert.rejects(service.importFile("test.wav"), error => error.name === "CleanupError" && /first disconnect failed/.test(error.message));
+});
+
 const fixture = fileURLToPath(new URL("./fixtures/cli-child.mjs", import.meta.url));
 const child = (mode, target, options = {}) => runProcess(process.execPath,
   [fixture, mode, ...(target ? [target] : [])], { timeoutMs: 5000, ...options });

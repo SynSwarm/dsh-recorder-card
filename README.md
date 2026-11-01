@@ -16,6 +16,8 @@ The main path is **DSH Host → bundled Python CLI → recorder card**, with Blu
 
 **New in 0.4.0:** a single connection icon and persistent Host BLE session, with recording workflows handled through conversation. Version `0.3.1` uses the previous settings card. This remains a development preview.
 
+**Workspace addition, not yet released:** `recorder_import` accepts an exact on-card `filename`; omission retains first-file behavior. It reuses the held Host session without an external CLI or connection handoff. A real DSH Agent named import, complete audio verification and retained connection passed. That test recording happened to be first in the list; non-first selection and interruption recovery still need hardware verification. See the [acceptance record](docs/import-recovery.md).
+
 If connection cleanup fails, the icon retains an unconfirmed-release warning. Pending device work fails before accessing BLE; inspect the card before explicitly retrying. A disconnected process alone is not proof of successful device cleanup.
 
 ## Current status
@@ -26,11 +28,11 @@ If connection cleanup fails, the icon retains an unconfirmed-release warning. Pe
 |---|---|---|
 | Bundle manifest and Skill provider | Implemented | M1 passed in an isolated DSH profile: loading, Skill access, disable/re-enable and child cleanup |
 | Single connection icon and conversation guidance | Implemented in 0.4.0 | Native desktop connection color, guidance submission and draft preservation pass; model reply, physical drops and multiple physical cards remain pending |
-| First-file import through conversation | Agent tools use the shared Host service | Historical Web-button import passed: 5.28-second WAV with verified decoding/hash; persistent-session import and cancellation/retry need hardware acceptance |
+| Import through conversation | First-file import released; exact list-name selection implemented in the workspace | Real DSH Agent named import and retained connection pass; test file was first in list, so non-first selection and interruption recovery remain pending |
 | Browser direct BLE | Retired from the shipped Client | Previous implementation retained only as a regression fixture |
 | Host Python CLI calls | Pinned-source adapter and process manager | Internal listing hardware smoke test and local queue/cancellation tests pass; DSH lifecycle verified; hardware tool acceptance pending, pinned CLI sources now bundled; no separate clone required |
 | `recorder_*` Agent device tools | Eight tools registered, typed configuration and structured process results | Schema/error/cancellation tests pass; real Host transcription/reuse pass; hardware import/control remain pending |
-| Client–Host communication for optional UI | Eleven device/ASR, settings and connection methods | See [Remote design and validation](docs/client-host-remote.md); connection-state polling performs no BLE I/O; no transfer-progress stream |
+| Client–Host communication for optional UI | Twelve methods in the workspace; eleven in 0.4.0 | Adds `importFile`; see [Remote design and validation](docs/client-host-remote.md); no transfer-progress stream |
 | Transcription providers and archive integrity | Safe audio/Markdown publication, fingerprint reuse and separate stage results implemented | Real Host SenseVoice transcription and tool reuse pass; full hardware recovery remains pending |
 
 See [ROADMAP.md](ROADMAP.md) for acceptance criteria. A [partial standalone CLI hardware run](docs/cli-validation.md) verified scan/status/list responses and a single-file transfer with complete WAV decoding; the user confirmed correct playback/content, while recording controls and remaining acceptance cases are pending. A later internal Host listing smoke test passed. Remote recording start remained unacknowledged; a physical-button recording appeared in the confirmed list. Full DSH tool acceptance remains pending.
@@ -54,10 +56,16 @@ The Host needs Python 3.11+, Bluetooth hardware and permission. The pinned Pytho
 
 1. Wake the card and disconnect other Bluetooth clients. Click the recorder icon or ask the Agent to call `recorder_connect`. A unique device connects and is remembered automatically; multiple candidates require your choice.
 2. Ask in the conversation to list recordings or disconnect. Use the icon's context menu to switch devices, or call `recorder_connect` with an empty address to scan afresh. Advanced `deviceAddress` configuration remains a fallback. npm 0.3.1 users still use the original card's device-address input.
-3. Call `recorder_list`, confirm the first recording may be imported, then call `recorder_import` (transcription defaults off). Only first-file import is currently exposed.
+3. Call `recorder_list` and select an authorized recording. Released 0.4.0 imports only the first file; this workspace supports `recorder_import({ "filename": "exact name from list" })`. Omit `filename` for the first file; transcription defaults off. For multiple selected recordings, call sequentially and stop on transfer errors; no external CLI is needed.
 4. Audio defaults to `~/.dsh-recorder-card/archive/audio/` on the Host; use the absolute path returned by the tool. Optional transcription needs a prepared DSH recognizer, or credentials for Doubao cloud ASR. Scanning and importing need no ASR credentials.
 
 When DSH/pnpm sets `minimumReleaseAge=1440`, a new release may be unavailable for its first 24 hours. Wait for the release to mature; do not disable that policy.
+
+Before upgrading, back up the active profile's `cordis.patch.yml` and `package.json`; compare custom settings afterward and verify the chosen model and speech service. Reported configuration loss has not been reproduced and is not established as expected upgrade behavior. See [upgrade checks](docs/import-recovery.md#profile-upgrade).
+
+New error codes distinguish `RECORDER_DEVICE_DISCONNECTED` (an observed disconnect) from `RECORDER_TRANSFER_INTERRUPTED` (incomplete transfer without confirmed disconnection). Inspect the device, reconnect, then explicitly retry that file from the beginning. Byte resume and automatic reconnection are not implemented. Resolve unconfirmed cleanup first; if audio was imported but transcription failed, retry transcription only.
+
+The workspace also adds transfer diagnostics: phase timings, received frame/byte counts and the age of the last snapshot on interruption. Host saves the latest diagnostic to `dataDir/recorder-diagnostics.json`, without audio, filenames or device identifiers. These counters are not a completion percentage or proof of audio integrity; there is no UI progress stream. See [diagnostic fields and limits](docs/import-recovery.md#transfer-diagnostics). This addition has offline verification only.
 
 Install Python dependencies once using the same interpreter configured in the plugin. Alternatively, from the installed plugin directory run `python -m pip install -r vendor/upstream/tools/requirements.txt`. Missing-dependency errors name the active interpreter and installation command. From the installed plugin directory, `python -B runtime/recorder_cli.py --check-deps` checks setup without Bluetooth access. See the [distribution validation record](docs/distribution-validation.md) for tested environments and remaining acceptance.
 
@@ -73,7 +81,7 @@ Install Python dependencies once using the same interpreter configured in the pl
 1. Follow the [local checks](CONTRIBUTING.md). Prepare Python/Bleak, check the bundled CLI, and enable Bluetooth access on the intended Host machine.
 2. Start M2a independently: scan, read status/list, and import/play one non-personal test recording, then complete recording controls and failure scenarios. DSH loading is not a prerequisite.
 3. Reproduce [M1 Host validation](docs/dsh-integration.md) on the target environment. The isolated Windows baseline passed; card rendering remains a separate optional check.
-4. After M1 and M2a pass, follow M2b → M3 → M4 for DSH device tools, single-file import, and default transcription. Standalone CLI success does not establish a working plugin workflow.
+4. With M1 loading and the relevant M2a device baseline, follow M2b → M3 → M4 for tools, import and transcription. Track recording-control compatibility separately while advancing the existing-recording workflow. Record implementation, offline and hardware results separately; standalone CLI success does not establish a working plugin workflow.
 
 ## Architecture
 

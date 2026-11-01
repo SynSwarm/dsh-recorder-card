@@ -1,5 +1,8 @@
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { createRecorderContract } from "./remote-contract.js";
+
+const { diagnosticsSchema, parseDiagnostics } = createRecorderContract();
 
 // A successful CLI process is not an end-to-end device/import/transcription verdict.
 const processOutput = {
@@ -11,6 +14,7 @@ const processOutput = {
       exitCode: { type: "integer", required: true },
       stdout: { type: "string", required: true },
       stderr: { type: "string", required: true },
+      diagnostics: diagnosticsSchema,
     },
   },
   render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
@@ -18,6 +22,7 @@ const processOutput = {
 
 const importOutput = {
   schema: { type: "object", additionalProperties: false, properties: {
+    diagnostics: diagnosticsSchema,
     status: { type: "string", enum: ["succeeded", "partial"], required: true },
     import: { type: "object", required: true, additionalProperties: false, properties: {
       status: { type: "string", enum: ["succeeded"], required: true },
@@ -61,21 +66,26 @@ const errorCodes = {
   CleanupError: "RECORDER_CLEANUP_FAILED", ImportResultError: "RECORDER_IMPORT_RESULT_INVALID",
   SettingsError: "RECORDER_SETTINGS_FAILED",
   TranscriptionError: "RECORDER_TRANSCRIPTION_FAILED",
+  DeviceDisconnectedError: "RECORDER_DEVICE_DISCONNECTED", TransferInterruptedError: "RECORDER_TRANSFER_INTERRUPTED",
 };
 async function executeProcess(operation, run) {
   return executeOperation(operation, async () => {
     const result = await run();
     return { operation, completion: "operation-completed", exitCode: result.code,
-      stdout: result.out, stderr: result.err };
+      stdout: result.out, stderr: result.err, ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}) };
   });
 }
 async function executeOperation(operation, run) {
-  try { return await run(); }
+  try {
+    const result = await run();
+    return result?.diagnostics ? { ...result, diagnostics: parseDiagnostics(result.diagnostics) } : result;
+  }
   catch (error) {
     const code = errorCodes[error.name];
     if (!code) throw error;
     const diagnostics = error.name === "CliExitError" && error.err ? `: ${error.err.slice(-2048)}` : "";
-    throw new HarnessError(`${operation}: ${error.message}${diagnostics}`, code, { cause: error });
+    const progress = error.diagnostics ? `; recorder diagnostics: ${JSON.stringify(parseDiagnostics(error.diagnostics))}` : "";
+    throw new HarnessError(`${operation}: ${error.message}${diagnostics}${progress}`, code, { cause: error });
   }
 }
 
@@ -86,6 +96,7 @@ async function executeOperation(operation, run) {
 export function registerRecorderTools(ctx, service) {
   const output = processOutput;
   const connectionOutput = { schema: { type: "object", additionalProperties: false, properties: {
+    diagnostics: diagnosticsSchema,
     status: { type: "string", required: true, enum: ["disconnected", "cleanup-unconfirmed", "connecting", "connected", "selection-required", "not-found"] },
     name: { type: "string", required: true }, address: { type: "string" }, message: { type: "string" },
     devices: { type: "array", items: { type: "object", additionalProperties: false, properties: {
@@ -157,14 +168,17 @@ export function registerRecorderTools(ctx, service) {
 
   ctx.tools.register(defineTool({
     name: "recorder_import",
-    description: "Import the first recording into dataDir/archive/audio/, optionally transcribing it through the configured provider after BLE cleanup. The default uses DSH speechToText; only an absent service falls back to Doubao cloud ASR. Inspect status: partial means audio is saved but transcription failed or connection cleanup is unconfirmed; retry transcription only using the returned audio path.",
+    description: "Import one recording by its exact filename from recorder_list; omit filename for the first recording. Reuses the persistent Host BLE session: do not disconnect or run an external CLI first. For multiple user-selected recordings, call sequentially and stop on a device/transfer error; reconnect and explicitly retry the failed file from the beginning, never assume byte resume. Optionally transcribe through DSH speechToText (only an absent service falls back to Doubao cloud ASR). Inspect status: partial means audio is saved but transcription failed or cleanup is unconfirmed; retry transcription only using the returned audio path.",
     parameters: {
+      filename: { type: "string", description: "Exact on-card name returned by recorder_list, not a local path, stem or comma-separated list. Omit to import the first recording." },
       outDir: { type: "string", description: "Destination directory relative to dataDir; defaults to the configured outDir, or archive/audio." },
       transcribe: { type: "boolean", description: "Transcribe after import using the configured provider; defaults to false. Doubao cloud fallback requires credentials and uploads audio." },
     },
     output: importOutput,
     async execute(args, exec) {
-      return executeOperation("import-first", () => service.importFirst(args.outDir, args.transcribe === true, { signal: exec.signal }));
+      return executeOperation("import", () => args.filename === undefined
+        ? service.importFirst(args.outDir, args.transcribe === true, { signal: exec.signal })
+        : service.importFile(args.filename, args.outDir, args.transcribe === true, { signal: exec.signal }));
     },
     presentCall: (args) => ({ card: "generic", title: "Import recorder card recording", kind: "other", rawInput: args }),
   }));

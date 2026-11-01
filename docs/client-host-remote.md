@@ -22,7 +22,7 @@ Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实
 - 所有方法声明最终 `signal` 取消参数；它不进入 JSON `args`。可选业务参数仍占调用位置，例如 `transcribe(file, undefined, signal)`、`importFirst(undefined, signal)`。
 - `status()` 是独立 CLI/BLE 操作，不作为扫描进度轮询。当前仅显示忙碌状态和最终文本，没有进度流。
 
-## 十一个方法（六个设备/转写、两个配置、三个连接）
+## 十二个方法（工作区新增 importFile，0.4.0 为十一个）
 
 | 方法 | 业务参数 | 返回值 |
 |---|---|---|
@@ -36,11 +36,14 @@ Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实
 | `list(signal?)` | 无，使用 Host 配置的地址 | 同上 |
 | `record(action, signal?)` | `state / start / pause / resume / save` | 同上；`state` 调用只读状态方法 |
 | `importFirst(options, signal?)` | `options` 可为 undefined；字段 `outDir?`、`transcribe?` | `{ status, import, transcription, cleanup }` |
+| `importFile(filename, options, signal?)` | 完整卡内文件名；`options` 同上，可传 undefined | 同一导入结果结构；已连接时复用原 Session |
 | `transcribe(file, force, signal?)` | 非空路径，`force` 为 boolean 或 undefined | `{ status, provider, recognizer, path, audioPath, audioSha256, reused, fallbackReason? }` |
 
 普通进程结果不等于全工作流成功，扫描无结果不等于发现设备。导入 `partial` 会分别显示转写失败与清理未确认，并保留已保存音频路径；转写重试不再次导入，且不能清除之前的连接释放警告。未知错误由 Gateway 统一处理，已知 CLI/配置/取消/超时错误映射为稳定 Remote 错误码。
 
 ## Client 生命周期与界面边界
+
+工作区的 ProcessResult、ConnectionState、ImportResult 增加可选 `diagnostics`，Host 与内联 Client 契约同步；已知错误经 `RemoteError.details.diagnostics` 保留同一结构。只含阶段、计数和时间等固定字段，拒绝未知字段；转写结构不变。worker 的内部心跳不作为 Client 订阅流暴露，界面不展示完成百分比。字段含义、取消后落盘及离线验证见[传输诊断](import-recovery.md#transfer-diagnostics)。
 
 客户端 manifest 声明 Gateway 依赖，`apply()` 先 `$mount`，等待 `remote.recorder`、`slots`、`sessions` 和 `conversation`，注册列表 Slot `conversation.input.left`，避免覆盖语音输入占用的单项 activity Slot。组件卸载取消自己的连接请求和状态轮询；已建立的 Host 会话属于共享 Service，切换对话不主动断开。Host 插件卸载释放连接和子进程。跨 Agent 与图标操作在同一连接上串行化；整个持续会话占据模块级 BLE 队列，其他实例不能启动竞争进程。
 

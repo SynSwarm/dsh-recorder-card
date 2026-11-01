@@ -13,6 +13,8 @@ archive/corpus/*
 .qs668-device
 recorder-settings.json
 .recorder-settings-*.tmp
+recorder-diagnostics.json
+.recorder-diagnostics-*.tmp
 
 # ---- Node ----
 node_modules/

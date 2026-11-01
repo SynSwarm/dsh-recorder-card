@@ -22,7 +22,7 @@ for (const path of [...Object.values(manifest.exports), manifest.dsh.bundle.patc
 for (const path of included) {
   assert.ok(!/(?:^|\/)__pycache__(?:\/|$)|\.py[co]$/.test(path), `Python cache in package: ${path}`);
   assert.ok(!/^(?:archive|tests|scripts|docs|\.cursor|\.git|\.cache)\//.test(path), `Unexpected package content: ${path}`);
-  assert.ok(!/(?:^|\/)(?:\.env(?:\..*)?|\.qs668-device|recorder-settings\.json|\.recorder-settings-.*\.tmp)$/.test(path), `Private data in package: ${path}`);
+  assert.ok(!/(?:^|\/)(?:\.env(?:\..*)?|\.qs668-device|recorder-(?:settings|diagnostics)\.json|\.recorder-(?:settings|diagnostics)-.*\.tmp)$/.test(path), `Private data in package: ${path}`);
 }
 
 // Full MIT text and NextProto copyright checked against upstream main/LICENSE
