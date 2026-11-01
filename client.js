@@ -1,491 +1,196 @@
-// Client half of the AI recorder card bundle: a Web Bluetooth card.
-//
-// Protocol primitives inlined from the upstream sdk/javascript/qs668-protocol.js
-// (MIT) so the card needs no extra module-format resolution. Canonical copy is
-// vendor/recorder-protocol.js.
-// Copyright (c) 2026 NextProto (upstream protocol portions).
-// Full upstream copyright and permission notice: vendor/LICENSE
-// https://github.com/nextproto1024/ai-recorder-card-open-protocol
-//
-// DSH constraints (from cordis-plugin-development references):
-//   - register into a slot with ctx.slots.inject / ctx.slots.register
-//   - React comes from require('react'), no CDN / duplicate React
-//   - only --dsw-alias-* theme tokens; do NOT require dsh-client-ui-* packages
-//   - register listeners/timers in apply via ctx.effect and return cleanup
-
+// DSH Client: BLE belongs to the Host. No Web Bluetooth or private UI imports.
 window.__ModuleLoader__.load({
   id: "dsh-recorder-card",
   factory(require) {
     const React = require("react");
-    const h = React.createElement;
-    const { useState, useEffect, useRef, useCallback } = React;
-
-    // ---- recorder card protocol (inlined from sdk/javascript/qs668-protocol.js) ----
-    const UUIDS = Object.freeze({
-      service: "0000ae20-0000-1000-8000-00805f9b34fb",
-      write: "0000ae21-0000-1000-8000-00805f9b34fb",
-      notify: "0000ae22-0000-1000-8000-00805f9b34fb",
-      keyNotify: "0000ae23-0000-1000-8000-00805f9b34fb",
-    });
-
-    function crc16Xmodem(bytes) {
-      let crc = 0x0000;
-      for (const b of bytes) {
-        crc ^= b << 8;
-        for (let i = 0; i < 8; i += 1) {
-          crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) : crc << 1;
-          crc &= 0xffff;
-        }
-      }
-      return crc & 0xffff;
+    const { createElement: h, useState, useRef, useEffect } = React;
+    // BEGIN REMOTE CONTRACT
+function createRecorderContract() {
+  const fail = () => { throw new TypeError("Invalid recorder Remote value"); };
+  const string = value => typeof value === "string" ? value : fail();
+  const nonempty = value => string(value).trim() ? value : fail();
+  const boolean = value => typeof value === "boolean" ? value : fail();
+  const integer = value => Number.isSafeInteger(value) ? value : fail();
+  const positive = value => integer(value) > 0 ? value : fail();
+  const oneOf = (...values) => value => values.includes(value) ? value : fail();
+  const optional = parse => value => value === undefined ? value : parse(value);
+  const array = parse => value => Array.isArray(value) ? value.map(parse) : fail();
+  const object = fields => value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+    if (Object.keys(value).some(key => !Object.hasOwn(fields, key))) return fail();
+    const result = {};
+    for (const [key, parse] of Object.entries(fields)) {
+      const parsed = parse(value[key]);
+      if (parsed !== undefined) result[key] = parsed;
     }
-
-    function toBytes(value) {
-      if (value instanceof Uint8Array) return value;
-      if (ArrayBuffer.isView(value)) {
-        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      }
-      return new Uint8Array(value);
-    }
-    function concatBytes(parts) {
-      const arrays = parts.map(toBytes);
-      const total = arrays.reduce((s, p) => s + p.length, 0);
-      const out = new Uint8Array(total);
-      let o = 0;
-      for (const p of arrays) { out.set(p, o); o += p.length; }
-      return out;
-    }
-    const bytes = (values) => new Uint8Array(values);
-    const u16LE = (v) => bytes([v & 0xff, (v >> 8) & 0xff]);
-    const u32LE = (v) => bytes([v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]);
-    const readU32BE = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
-    function fixedTextBytes(text, length) {
-      const out = new Uint8Array(length);
-      out.set(new TextEncoder().encode(text).slice(0, length));
-      return out;
-    }
-    function decodeText(b) {
-      const end = b.indexOf(0);
-      return new TextDecoder().decode(end >= 0 ? b.slice(0, end) : b).trim();
-    }
-
-    function buildFrame(payload, seq = 0) {
-      const data = toBytes(payload);
-      const len = u16LE(data.length);
-      const crc = crc16Xmodem(concatBytes([len, data]));
-      const frame = new Uint8Array(6 + data.length);
-      frame[0] = 0x5a;
-      frame[1] = seq & 0xff;
-      frame[2] = crc & 0xff;
-      frame[3] = (crc >> 8) & 0xff;
-      frame.set(len, 4);
-      frame.set(data, 6);
-      return frame;
-    }
-
-    class FrameParser {
-      constructor() { this.buffer = new Uint8Array(0); }
-      push(chunk) {
-        this.buffer = concatBytes([this.buffer, toBytes(chunk)]);
-        const frames = [];
-        while (this.buffer.length >= 6) {
-          const i = this.buffer.indexOf(0x5a);
-          if (i < 0) { this.buffer = new Uint8Array(0); break; }
-          if (i > 0) this.buffer = this.buffer.slice(i);
-          if (this.buffer.length < 6) break;
-          const seq = this.buffer[1];
-          const expectedCrc = this.buffer[2] | (this.buffer[3] << 8);
-          const len = this.buffer[4] | (this.buffer[5] << 8);
-          const total = 6 + len;
-          if (this.buffer.length < total) break;
-          const payload = this.buffer.slice(6, total);
-          if (crc16Xmodem(this.buffer.slice(4, total)) === expectedCrc) {
-            frames.push({ seq, payload, type: payload[0], cmd: payload[1], params: payload.slice(2) });
-            this.buffer = this.buffer.slice(total);
-          } else {
-            this.buffer = this.buffer.slice(1);
-          }
-        }
-        return frames;
-      }
-    }
-
-    const commands = {
-      syncTime(date = new Date()) {
-        const y = date.getFullYear();
-        return bytes([0, 0, y & 0xff, y >> 8, date.getMonth() + 1, date.getDate(),
-          date.getHours(), date.getMinutes(), date.getSeconds()]);
-      },
-      getBattery: () => bytes([0, 3]),
-      listFiles: () => bytes([2, 0]),
-      importFile: (filename, offset = 0) =>
-        concatBytes([bytes([2, 2]), u32LE(offset), fixedTextBytes(filename, 24)]),
-      startRecording: () => bytes([3, 1]),
-      saveRecording: () => bytes([3, 3]),
-      pauseRecording: () => bytes([3, 5]),
-      resumeRecording: () => bytes([3, 7]),
-      getRecordState: () => bytes([3, 19]),
-    };
-
-    function parseFileList(payload) {
-      const b = toBytes(payload);
-      if (b.length < 4) return [];
-      const count = readU32BE(b, 0);
-      const files = [];
-      let o = 4;
-      for (let i = 0; i < count && o + 28 <= b.length; i += 1) {
-        const e = b.slice(o, o + 28);
-        files.push({
-          durationOrTime: readU32BE(e, 0),
-          size: readU32BE(e, 4),
-          name: decodeText(e.slice(8, 28)),
-          rawEntry: e,
-        });
-        o += 28;
-      }
-      return files;
-    }
-
-    // ---- Web Bluetooth session ----
-    async function openSession(onFrame, onDisconnect, signal) {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [UUIDS.service] }],
-        optionalServices: [UUIDS.service],
-      });
-      if (signal.aborted) throw new Error("连接已取消");
-      const server = device.gatt;
-      let notifyChar;
-      let closed = false;
-      const parser = new FrameParser();
-      const onValue = (ev) => {
-        if (closed) return;
-        for (const f of parser.push(ev.target.value)) {
-          if (closed) break;
-          onFrame(f);
-        }
-      };
-      const close = (notifyDisconnect = false) => {
-        if (closed) return;
-        closed = true;
-        notifyChar?.removeEventListener("characteristicvaluechanged", onValue);
-        device.removeEventListener("gattserverdisconnected", onLost);
-        signal.removeEventListener("abort", onAbort);
-        if (server.connected) server.disconnect();
-        if (notifyDisconnect) onDisconnect();
-      };
-      const onLost = () => close(true);
-      const onAbort = () => close();
-      const ensureOpen = () => {
-        if (closed || !server.connected) throw new Error("录音卡已断开连接");
-      };
-      device.addEventListener("gattserverdisconnected", onLost);
-      signal.addEventListener("abort", onAbort);
-      try {
-        await server.connect();
-        ensureOpen();
-        const service = await server.getPrimaryService(UUIDS.service);
-        ensureOpen();
-        const writeChar = await service.getCharacteristic(UUIDS.write);
-        ensureOpen();
-        notifyChar = await service.getCharacteristic(UUIDS.notify);
-        ensureOpen();
-        notifyChar.addEventListener("characteristicvaluechanged", onValue);
-        await notifyChar.startNotifications();
-        ensureOpen();
-        let seq = 0;
-        let writeTail = Promise.resolve();
-        const send = (payload) => {
-          // All callers, including initialization, share this session's queue.
-          const data = toBytes(payload).slice();
-          const result = writeTail.then(() => {
-            // Recheck at execution time: disconnect invalidates queued writes.
-            ensureOpen();
-            const frame = buildFrame(data, seq++);
-            if (writeChar.properties && writeChar.properties.writeWithoutResponse) {
-              return writeChar.writeValueWithoutResponse(frame);
+    return result;
+  };
+  const error = object({ code: nonempty, message: string });
+  const process = object({ code: integer, out: string, err: string });
+  const device = object({ deviceAddress: string, source: oneOf("saved", "config", "none") });
+  const transcriptFields = { provider: oneOf("dsh", "doubao"), recognizer: nonempty, path: nonempty,
+    audioPath: nonempty, audioSha256: value => /^[a-f0-9]{64}$/.test(string(value)) ? value : fail(),
+    reused: boolean, fallbackReason: optional(nonempty) };
+  const transcript = object({ status: oneOf("succeeded"), ...transcriptFields });
+  const imported = object({
+    status: oneOf("succeeded", "partial"),
+    import: object({ status: oneOf("succeeded"), path: nonempty, bytes: positive,
+      sha256: value => /^[a-f0-9]{64}$/.test(string(value)) ? value : fail(),
+      integrity: object({ status: oneOf("verified"), format: oneOf("wav-pcm"),
+        channels: positive, sampleRate: positive, bitsPerSample: positive, frames: positive }),
+    }),
+    transcription: object({ status: oneOf("not-requested", "succeeded", "failed"),
+      ...Object.fromEntries(Object.entries(transcriptFields).map(([key, parse]) => [key, optional(parse)])),
+      exitCode: optional(value => value === null ? null : integer(value)), error: optional(error),
+      retry: optional(object({ tool: oneOf("recorder_transcribe"), arguments: object({ file: nonempty }) })),
+    }),
+    cleanup: object({ status: oneOf("succeeded", "not-needed", "unconfirmed"), errors: array(error) }),
+  });
+  const codec = (name, parse) => ({ mode: "strict", typeSymbol: `dsh-recorder-card#${name}`,
+    create: () => ({ parse }), encode: value => parse(value), decode: value => parse(value) });
+  const parameter = (name, parse, acceptsUndefined = false) => ({ name, wire: name, source: "json",
+    codec: codec(name, parse), ...(acceptsUndefined ? { acceptsUndefined: true } : {}) });
+  const definitions = {
+    scan: [], status: [], list: [],
+    record: [parameter("action", oneOf("state", "start", "pause", "resume", "save"))],
+    importFirst: [parameter("options", optional(object({ outDir: optional(nonempty), transcribe: optional(boolean) })), true)],
+    transcribe: [parameter("file", nonempty), parameter("force", optional(boolean), true)],
+    getDevice: [],
+    saveDevice: [parameter("address", string)],
+  };
+  const descriptors = Object.entries(definitions).map(([method, parameters]) => ({
+    id: `dsh-recorder-card#recorder/${method}`, service: "recorderController", namespace: "recorder", method,
+    invocation: { kind: "direct" }, parameters, cancellation: { parameter: "signal" },
+    result: method === "transcribe" ? codec("TranscriptResult", transcript)
+      : method === "getDevice" || method === "saveDevice" ? codec("DeviceSettings", device)
+      : codec(method === "importFirst" ? "ImportResult" : "ProcessResult", method === "importFirst" ? imported : process),
+  }));
+  return { package: "dsh-recorder-card", descriptors };
+}
+// END REMOTE CONTRACT
+    const contribution = createRecorderContract();
+    const css = `.recorder-card {color:var(--dsw-alias-label-primary);font-size:12px}
+.recorder-card button {color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:4px 8px;cursor:pointer}
+.recorder-card button:disabled {opacity:.5;cursor:not-allowed}
+.recorder-card button:hover:not(:disabled) {background:var(--dsw-alias-interactive-bg-hover-solid)}
+.recorder-card .rec-icon-btn {width:32px;height:32px;border-radius:50%;padding:0;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary);background:transparent}
+.recorder-card .rec-actions {display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.recorder-card pre {white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
+.recorder-card details {margin:6px 0}`;
+    function createCard(remote, lifetime) {
+      return function Card() {
+        const [open, setOpen] = useState(false);
+        const [busy, setBusy] = useState("");
+        const [output, setOutput] = useState("");
+        const [failure, setFailure] = useState("");
+        const [imported, setImported] = useState(null);
+        const [address, setAddress] = useState("");
+        const [selection, setSelection] = useState(null);
+        const active = useRef(null);
+        const mounted = useRef(true);
+        useEffect(() => {
+          mounted.current = true;
+          return () => { mounted.current = false; active.current?.abort(); };
+        }, []);
+        async function run(label, method, ...args) {
+          if (active.current || lifetime.disposed) return;
+          const control = new AbortController();
+          active.current = control;
+          lifetime.calls.add(control);
+          setBusy(label); setFailure(""); setOutput("");
+          try {
+            const result = await remote[method](...args, control.signal);
+            if (!mounted.current || lifetime.disposed) return;
+            if (!result.ok) throw result.error;
+            if (control.signal.aborted) {
+              setFailure("操作已取消，设备状态或连接释放未确认。请检查状态后再操作。");
+              return;
             }
-            return writeChar.writeValue(frame);
-          });
-          // Report failure to this caller without poisoning the remaining queue.
-          writeTail = result.catch(() => {});
-          return result;
-        };
-        return { device, server, send, disconnect: () => close() };
-      } catch (error) {
-        close();
-        // A pending connect may have resolved after a disconnect event.
-        if (server.connected) server.disconnect();
-        throw error;
-      }
-    }
-
-    // ---- React card ----
-    function Card() {
-      const [session, setSession] = useState(null);
-      const [battery, setBattery] = useState(null);
-      const [recordState, setRecordState] = useState(null);
-      const [files, setFiles] = useState([]);
-      const [log, setLog] = useState("");
-      const [connecting, setConnecting] = useState(false);
-      const [listing, setListing] = useState(false);
-      const [listMessage, setListMessage] = useState("");
-      const [listBlocked, setListBlocked] = useState(false);
-      const sessionRef = useRef(null);
-      const connection = useRef(null); // identity survives awaits, invalidated on disconnect/unmount
-      const listCollector = useRef(null); // { frames: [], timer } while listing
-      const listNeedsReconnect = useRef(false); // synchronous guard for stale button handlers
-
-      const onFrame = useCallback((f) => {
-        if (f.type === 0 && f.cmd === 4) setBattery(f.params[0]); // 0-4 battery %
-        if (f.type === 3 && f.cmd === 20) setRecordState(f.params[0]); // 3-20
-        const collector = listCollector.current;
-        if (collector) {
-          if (f.type === 2 && f.cmd === 1) {
-            collector.frames.push(f); // 2-1 list data
-            armListTimeout(collector);
-          }
-          if (f.type === 2 && f.cmd === 18) {
-            // The protocol defines body 0 as complete, but no request-ID echo.
-            finishList(collector, f.params[0] === 0 ? "complete" : "unconfirmed");
+            if (method === "getDevice" || method === "saveDevice") {
+              setSelection(result.value);
+              setAddress(result.value.deviceAddress);
+              setImported(null);
+              setOutput(method === "saveDevice" ? "设备地址已保存并生效；无需重新加载。" : "已读取当前设备配置。");
+            } else if (method === "importFirst") {
+              const value = result.value;
+              setImported(value);
+              setOutput(`音频已保存：${value.import.path}\n完整性：已验证\n转写：${value.transcription.status}\n连接清理：${value.cleanup.status}`);
+              const warnings = [value.transcription.error?.message, ...value.cleanup.errors.map(e => e.message)].filter(Boolean);
+              if (value.status === "partial") setFailure(`导入部分完成：${warnings.join("；") || "请检查转写和连接清理状态。"}`);
+            } else if (method === "transcribe") {
+              const value = result.value;
+              setOutput(`转写已${value.reused ? "复用" : "保存"}：${value.path}\n后端：${value.provider} / ${value.recognizer}`);
+              if (value.fallbackReason) setFailure(`已回退豆包：${value.fallbackReason}`);
+              if (imported) setImported({ ...imported, transcription: { ...value, exitCode: 0 } });
+            } else {
+              const value = result.value;
+              setOutput(value.out || "命令已结束（没有文本输出）。");
+              if (value.err) setFailure(value.err);
+            }
+          } catch (error) {
+            if (mounted.current && !lifetime.disposed) setFailure(control.signal.aborted
+              ? "操作已取消，设备状态或连接释放未确认。请检查状态后再操作。"
+              : `${error.code ? `${error.code}: ` : ""}${error.message ?? error}`);
+          } finally {
+            lifetime.calls.delete(control);
+            if (active.current === control) active.current = null;
+            if (mounted.current && !lifetime.disposed) setBusy("");
           }
         }
-      }, []);
-
-      function blockListUntilReconnect() {
-        // SEQ is not documented as a request/response correlation ID. Once a
-        // response is uncertain, reusing this session could misattribute late frames.
-        listNeedsReconnect.current = true;
-        setListBlocked(true);
-      }
-
-      function finishList(collector, outcome = "complete") {
-        if (!collector || listCollector.current !== collector) return;
-        clearTimeout(collector.timer);
-        listCollector.current = null;
-        setListing(false);
-        const all = collector.frames.flatMap((f) => parseFileList(f.params));
-        setFiles(all);
-        if (outcome !== "complete") blockListUntilReconnect();
-        if (outcome === "timeout") {
-          setListMessage(collector.frames.length
-            ? `读取文件列表超时，已收到 ${all.length} 个文件，结果可能不完整，请先断开并重新连接后再读取。`
-            : "读取文件列表超时，未收到列表数据，无法确认设备是否为空，请先断开并重新连接后再读取。");
-        } else if (outcome === "unconfirmed") {
-          setListMessage("列表结束响应未确认成功，结果可能不完整，请先断开并重新连接后再读取。");
-        } else {
-          setListMessage(`列表读取完成，共 ${all.length} 个文件。`);
-        }
-      }
-
-      function armListTimeout(collector) {
-        clearTimeout(collector.timer);
-        // An idle timeout is not a device completion notification.
-        collector.timer = setTimeout(() => finishList(collector, "timeout"), 1200);
-      }
-
-      function discardList() {
-        const collector = listCollector.current;
-        listCollector.current = null;
-        if (collector) clearTimeout(collector.timer);
-      }
-
-      function resetConnection(message = "") {
-        const attempt = connection.current;
-        connection.current = null;
-        attempt?.abort();
-        sessionRef.current = null;
-        discardList();
-        listNeedsReconnect.current = false;
-        setSession(null);
-        setConnecting(false);
-        setListing(false);
-        setListMessage("");
-        setListBlocked(false);
-        setBattery(null);
-        setRecordState(null);
-        setFiles([]);
-        setLog(message);
-      }
-
-      const connect = async () => {
-        if (connection.current) return;
-        const attempt = new AbortController();
-        connection.current = attempt;
-        setConnecting(true);
-        setLog("");
-        let s;
-        try {
-          s = await openSession(
-            (frame) => { if (connection.current === attempt) onFrame(frame); },
-            () => {
-              if (connection.current === attempt) resetConnection("录音卡连接已断开，请重新连接");
-            },
-            attempt.signal,
-          );
-          if (connection.current !== attempt) { s.disconnect(); return; }
-          sessionRef.current = s;
-          setSession(s);
-          await s.send(commands.syncTime());
-          await s.send(commands.getBattery());
-          await s.send(commands.getRecordState());
-        } catch (error) {
-          s?.disconnect();
-          if (connection.current === attempt) resetConnection(`连接失败：${error.message}`);
-        } finally {
-          if (connection.current === attempt) setConnecting(false);
-        }
+        const button = (label, method, ...args) => h("button", { type: "button", disabled: !!busy,
+          onClick: () => run(label, method, ...args) }, label);
+        return h("div", { className: "recorder-card" }, h("style", null, css),
+          h("button", { type: "button", className: "rec-icon-btn", title: "扫描录音卡（Host 蓝牙）", "aria-label": "扫描录音卡",
+            disabled: !!busy, onClick: () => { setOpen(true); return run("正在扫描附近的录音卡…", "scan"); } },
+            h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, "aria-hidden": true },
+              h("rect", { x: 9, y: 2, width: 6, height: 12, rx: 3 }), h("path", { d: "M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" }))),
+          h("button", { type: "button", disabled: !!busy,
+            onClick: () => { setOpen(true); return run("读取设备配置…", "getDevice"); } }, "设置设备"),
+          open && h("div", null,
+            h("p", null, "使用 DSH Host 的蓝牙。扫描后，将设备标识粘贴到下方并保存；扫描不表示持续连接。"),
+            h("label", null, "设备地址", h("input", { "aria-label": "设备地址", value: address, disabled: !!busy,
+              maxLength: 256, placeholder: "扫描结果中的设备标识", onChange: event => setAddress(event.target.value) })),
+            button("保存设备地址", "saveDevice", address),
+            selection && h("p", null, selection.deviceAddress ? `当前设备：${selection.deviceAddress}` : "尚未配置设备；扫描无需地址。"),
+            h("p", null, "保存空地址可清除设备选择；地址仅保存在 Host 用户数据目录。"),
+            h("div", { className: "rec-actions" }, button("读取状态", "status"), button("读取文件列表", "list"),
+              button("导入首条录音", "importFirst", { transcribe: false }),
+              button("导入首条并转写", "importFirst", { transcribe: true })),
+            h("p", null, "转写默认使用 DSH 已选择的识别器；speechToText 服务未挂载时回退豆包云端，需要相应凭据并上传音频。"),
+            h("details", null, h("summary", null, "录音控制（固件支持未确认）"),
+              h("p", null, "请先确认周围适合录制。操作失败时不要自动重试；取消不会替设备保存录音。"),
+              h("div", { className: "rec-actions" }, button("录音状态", "record", "state"),
+                button("开始录音", "record", "start"), button("暂停", "record", "pause"),
+                button("继续录音", "record", "resume"), button("保存录音", "record", "save"))),
+            imported && h("div", null,
+              h("p", null, `已保存音频：${imported.import.path}；转写：${imported.transcription.status}；连接清理：${imported.cleanup.status}`),
+              imported.transcription.path && h("p", null, `转写文件：${imported.transcription.path}；后端：${imported.transcription.provider}`),
+              imported.transcription.fallbackReason && h("p", { role: "alert" }, `已回退豆包：${imported.transcription.fallbackReason}`),
+              imported.cleanup.status === "unconfirmed" && h("p", { role: "alert" },
+                `导入时连接释放未确认：${imported.cleanup.errors.map(e => e.message).join("；")}`)),
+            imported?.transcription.status === "failed" && button("重试已保存音频的转写", "transcribe", imported.import.path, false),
+            busy && h("div", { role: "status" }, busy, h("button", { type: "button", onClick: () => active.current?.abort() }, "取消")),
+            failure && h("pre", { role: "alert" }, failure),
+            output && h("pre", { role: "status" }, output)));
       };
-
-      const disconnect = () => {
-        const s = sessionRef.current;
-        resetConnection();
-        s?.disconnect();
-      };
-
-      const sendCommands = async (payloads) => {
-        const s = sessionRef.current;
-        if (!s) return;
-        try {
-          for (const payload of payloads) {
-            if (sessionRef.current !== s) return;
-            await s.send(payload);
-          }
-        } catch (error) {
-          if (sessionRef.current === s) setLog(`操作失败：${error.message}`);
-        }
-      };
-
-      const refreshStatus = () => sendCommands([commands.getBattery(), commands.getRecordState()]);
-
-      const record = async (action) => {
-        const map = {
-          start: commands.startRecording, pause: commands.pauseRecording,
-          resume: commands.resumeRecording, save: commands.saveRecording,
-        };
-        await sendCommands([map[action](), commands.getRecordState()]);
-      };
-
-      const listFiles = async () => {
-        const s = sessionRef.current;
-        if (!s || listCollector.current || listNeedsReconnect.current) return;
-        const collector = { frames: [], timer: null };
-        listCollector.current = collector;
-        setListing(true);
-        setFiles([]);
-        setListMessage("正在读取文件列表…");
-        setLog("");
-        try {
-          await s.send(commands.listFiles());
-          if (listCollector.current === collector) armListTimeout(collector);
-        } catch (error) {
-          if (listCollector.current !== collector) return;
-          discardList();
-          setListing(false);
-          // A rejected write does not prove the device received no request.
-          blockListUntilReconnect();
-          setListMessage(`读取文件列表失败：${error.message}，请先断开并重新连接后再读取。`);
-        }
-      };
-
-      const importFile = async (file) => {
-        if (!session) return;
-        // TODO(Phase 1): run the 2-2 -> 2-3 -> 2-4 -> 2-5 sequence per protocol,
-        // assemble chunks, then hand bytes to the Host via Remote/session command
-        // (Host writes archive/audio and optionally transcribes). Reference:
-        // website/app.js. Remember 2-2 must be ONE 36-byte GATT write.
-        setLog(`import "${file.name}" 待接入 Host 落盘（Phase 2）`);
-      };
-
-      useEffect(() => () => {
-        const attempt = connection.current;
-        connection.current = null;
-        attempt?.abort();
-        discardList();
-        const s = sessionRef.current;
-        sessionRef.current = null;
-        s?.disconnect();
-      }, []);
-
-      if (!session) {
-        return h("div", { style: cardStyle },
-          styleEl,
-          h("button", { className: "rec-btn rec-btn-primary", onClick: connect, disabled: connecting }, "连接录音卡"),
-          connecting ? h("span", null, "正在连接…") : null,
-          log ? h("div", null, log) : null);
-      }
-
-      return h("div", { style: cardStyle },
-        styleEl,
-        h("div", { style: row },
-          h("span", null, battery == null ? "电量 —" : `电量 ${battery}%`),
-          h("span", null, recordStateLabel(recordState)),
-          h("button", { className: "rec-btn", onClick: refreshStatus }, "刷新"),
-          h("button", { className: "rec-btn", onClick: disconnect }, "断开")),
-        h("div", { style: row },
-          h("button", { className: "rec-btn", onClick: () => record("start") }, "开始录音"),
-          h("button", { className: "rec-btn", onClick: () => record("pause") }, "暂停"),
-          h("button", { className: "rec-btn", onClick: () => record("resume") }, "继续"),
-          h("button", { className: "rec-btn", onClick: () => record("save") }, "保存")),
-        h("div", { style: row },
-          h("button", { className: "rec-btn", onClick: listFiles, disabled: listing || listBlocked }, "读取文件列表"),
-          h("span", null, files.length ? `${files.length} 个文件` : "")),
-        listMessage ? h("div", { role: "status" }, listMessage) : null,
-        files.length
-          ? h("ul", null, files.map((f) =>
-              h("li", { key: f.name }, f.name, " ",
-                h("button", { className: "rec-btn", onClick: () => importFile(f) }, "导入"))))
-          : null,
-        log ? h("div", null, log) : null);
     }
-
-    function recordStateLabel(s) {
-      return s === 1 ? "录音中" : s === 2 ? "未录音" : s === 3 ? "已暂停" : "录音态 —";
-    }
-
-    const cardStyle = {
-      display: "flex", flexDirection: "column",
-      gap: "var(--dsw-alias-space-2, 8px)", padding: "var(--dsw-alias-space-2, 8px)",
-      color: "var(--dsw-alias-label-primary, inherit)",
-    };
-    const row = { display: "flex", gap: "var(--dsw-alias-space-2, 8px)", alignItems: "center" };
-    const recButtonCss = `
-.rec-btn {
-  padding: 4px 12px;
-  font-size: 13px;
-  line-height: 20px;
-  border-radius: var(--dsw-radius-lg, 8px);
-  border: 1px solid var(--dsw-alias-border-l1, transparent);
-  background: transparent;
-  color: var(--dsw-alias-label-primary, inherit);
-  cursor: pointer;
-  font-family: inherit;
-}
-.rec-btn:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-solid);
-}
-.rec-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.rec-btn-primary {
-  background: var(--dsw-alias-state-business-primary, #247bbf);
-  border-color: transparent;
-  color: #fff;
-}
-.rec-btn-primary:hover:not(:disabled) {
-  filter: brightness(0.94);
-}
-`;
-    const styleEl = h("style", null, recButtonCss);
-
     return {
-      inject: ["slots"],
-      apply(ctx) {
-        ctx.slots.inject("conversation.input.activity", () => ctx.slots.register({
-          name: "conversation.input.activity",
-          id: "recorder-card",
-          order: 5,
-        }, Card));
+      inject: ["remote"],
+      async apply(ctx) {
+        const lifetime = { calls: new Set(), disposed: false };
+        const disposeRemote = await ctx.remote.$mount(contribution);
+        const ui = ctx.inject(["remote.recorder", "slots"], child => {
+          child.slots.inject("conversation.input.activity", () => child.slots.register({
+            name: "conversation.input.activity", id: "recorder-card", order: 5,
+          }, createCard(child.remote.recorder, lifetime)));
+        });
+        const dispose = async () => {
+          lifetime.disposed = true;
+          for (const call of lifetime.calls) call.abort();
+          try { await ui.dispose(); } finally { await disposeRemote(); }
+        };
+        try { await ui; } catch (error) { await dispose(); throw error; }
+        return dispose;
       },
     };
   },

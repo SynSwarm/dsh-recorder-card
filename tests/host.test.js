@@ -1,24 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, access } from "node:fs/promises";
-import { resolve, isAbsolute } from "node:path";
+import { readFile, access, mkdtemp, rm } from "node:fs/promises";
+import { resolve, isAbsolute, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { Context } from "@deepseek-ai/cordis";
 import * as host from "../index.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
 // Capture the provider contract only. Cordis disposal requires a real Host;
 // this fixture must not be reported as an unload/reload integration test.
-function providerFixture() {
+async function providerFixture(t) {
   const providers = [];
-  host.apply({ tools: { register() {} }, effect(create) { create(); }, skills: { registerProvider(create) { providers.push(create()); } } });
+  const ctx = new Context();
+  ctx.provide("tools", { register() {} });
+  ctx.provide("skills", { registerProvider(create) { providers.push(create()); } });
+  const dataDir = await mkdtemp(join(tmpdir(), "recorder-host-settings-"));
+  const mounted = ctx.plugin(host, { dataDir });
+  t.after(async () => { await mounted.dispose(); await rm(dataDir, { recursive: true, force: true }); });
+  await mounted;
   assert.equal(providers.length, 1);
   return providers[0];
 }
 
-test("Host advertises the bundled Skill with metadata matching its frontmatter", async () => {
-  const provider = providerFixture();
+test("Host advertises the bundled Skill with metadata matching its frontmatter", async (t) => {
+  const provider = await providerFixture(t);
   assert.deepEqual(host.inject, ["skills", "tools"]);
   assert.equal(provider.name, "recorder-card");
   const candidates = await provider.list();
@@ -34,8 +42,8 @@ test("Host advertises the bundled Skill with metadata matching its frontmatter",
   assert.equal(candidate.resourceBase.kind, "directory");
 });
 
-test("Skill definition contains its body without discovery-only fields", async () => {
-  const provider = providerFixture();
+test("Skill definition contains its body without discovery-only fields", async (t) => {
+  const provider = await providerFixture(t);
   const [candidate] = await provider.list();
   const definition = await provider.get(candidate);
   assert.equal(definition.name, candidate.name);
@@ -45,23 +53,23 @@ test("Skill definition contains its body without discovery-only fields", async (
   assert.equal(definition.content.startsWith("---"), false);
 });
 
-test("Skill loading honors cancellation", async () => {
-  const provider = providerFixture();
+test("Skill loading honors cancellation", async (t) => {
+  const provider = await providerFixture(t);
   const [candidate] = await provider.list();
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(provider.get(candidate, { signal: controller.signal }), { name: "AbortError" });
 });
 
-test("Skill provider rejects foreign names and filesystem locators", async () => {
-  const provider = providerFixture();
+test("Skill provider rejects foreign names and filesystem locators", async (t) => {
+  const provider = await providerFixture(t);
   const [candidate] = await provider.list();
   assert.equal(await provider.get({ ...candidate, name: "another-skill" }), undefined);
   assert.equal(await provider.get({ ...candidate, locator: resolve(root, "package.json") }), undefined);
 });
 
-test("Skill local references resolve relative to the advertised resource base", async () => {
-  const provider = providerFixture();
+test("Skill local references resolve relative to the advertised resource base", async (t) => {
+  const provider = await providerFixture(t);
   const [candidate] = await provider.list();
   const definition = await provider.get(candidate);
   const links = [...definition.content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]

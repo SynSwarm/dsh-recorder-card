@@ -2,6 +2,8 @@
 
 ## 当前结论：M1 自验收通过（2026-11-01）
 
+同日新增的 Client→Host 接线、官方 Gateway 测试和真实 Loader 六项检查单列于 [Remote 设计与验证](client-host-remote.md)。后续真实 Web 创造模式的配置、扫描和首条导入也在该记录中，不能扩大下面历史 M1 的范围或替代其他里程碑的异常场景验收。
+
 使用用户提供的 DSH 安装，通过官方 CLI 将本地测试 tarball 安装到工作区隔离 profile，验证了真实 Host 加载、六个工具注册、Skill 正文/资源访问，以及禁用、重启用和活动测试子进程清理。这里只通过 M1；M2a/M2b 的完整硬件验收、M3 导入与 M4 DSH 转写仍未通过，也没有发布此工作区版本。以下历史记录保留当时边界，不作为当前状态。
 
 | 环境 / 项目 | 实测记录 |
@@ -27,7 +29,7 @@
 
 ### Config 与工具作用域补充核对（2026-11-01）
 
-本地 `@deepseek-ai/schemastery` 中，字段只有显式 `.required()` 才要求必填。`Config({})` 可成功解析，`repoRoot`、`deviceAddress` 均保留为缺省；服务层为前者使用 Host 工作目录，并仅在需要设备的操作中校验后者。无需按 Zod 的语义添加 `.optional()`。
+本地 `@deepseek-ai/schemastery` 中，字段只有显式 `.required()` 才要求必填。`Config({})` 可成功解析，`repoRoot`、`deviceAddress` 均保留为缺省；当时服务层为前者使用 Host 工作目录，并仅在需要设备的操作中校验后者。后续随包分发已将 repoRoot 默认改为包内 vendor/upstream，见[分发验证记录](distribution-validation.md)。无需按 Zod 的语义添加 `.optional()`。
 
 本地 `@deepseek-ai/dsh-tools@0.2.0-rc.2` 支持 Host 全局注册，Agent 作用域继承全局工具并应用作用域限制。`node --test tests/tools.test.js` 的 11 项测试通过；新增测试使用真实 Cordis/DSH 注册表与 `createScope`，以测试身份模拟 Agent/preset 作用域，验证：
 

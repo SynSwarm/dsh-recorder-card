@@ -4,11 +4,29 @@ Record completed repository changes here. Future work and acceptance criteria li
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbering follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Version `0.1.0` is recorded as an npm development-preview release; publication does not establish DSH or hardware compatibility.
 
+## [0.3.0] - 2026-11-01
+
+- Bundle pinned upstream Python CLI sources and their MIT notice; remove the default external checkout requirement. Python dependencies still need one-time installation.
+- Add the Host Remote card and shared recorder Service, including cancellation and separate import/transcription/cleanup results.
+- Add a device-address input with atomic persistence under dataDir and immediate use by both the card and Agent tools. Saved selection takes precedence over legacy Config; saving an empty address clears it.
+- Implement default DSH speech-to-text, absent-service-only Doubao fallback, fingerprint-linked Markdown reuse, non-overwriting forced results and retained-audio failures. Verify real Host Gateway SenseVoice inference and Agent tool reuse; complete M4 acceptance remains pending.
+- Validate the real DSH Web Client in Creator (`cordis`) mode; detailed evidence and hardware limits are recorded in `docs/client-host-remote.md`.
+
 ## [Unreleased]
+
+### Fixed after 0.3.0
+
+- Recheck current audio bytes before returning cached transcripts or publishing archives; changed, truncated or removed inputs cannot succeed with a stale fingerprint.
+- Reuse recognized text across moved/copied audio by publishing a separate archive bound to the current path and title. Preserve original archives and filename-derived timing provenance; prefer an existing archive for the exact current path. These fixes are not included in npm 0.3.0.
 
 The existing entries below describe completed repository work. Their allocation to `0.1.0` or a subsequent release is pending comparison with the published tarball; they must not be read as a verified diff from `0.1.0`. Once that comparison is available, move shipped changes to the versioned entry and leave only later work here.
 
 ### Added
+
+- Route the Client card through six cancellable Typert Remote methods and one injectable recorder Service shared with Agent tools. Ship Host/client descriptors, strict boundary validation, stage-aware import feedback and saved-audio transcription retry. Retire Web Bluetooth from the shipped Client; keep its historical regression fixture.
+
+- Bundle unmodified NextProto CLI/protocol/transcription sources at commit `de42d1fbf19fc92064ac4688f71f42730c82267f`, with MIT notice, provenance and package checks. Remove the default external-checkout requirement; keep repoRoot as a developer override.
+- Add Python dependency diagnostics and first-device configuration guidance. Separate dataDir (default `~/.dsh-recorder-card`) from installed sources for audio, corpus, device cache and ASR configuration. Relative paths now use dataDir; existing data is not migrated.
 
 - Verify global recorder tools are inherited by local agent scopes, can dispatch a configuration-only check, and respect preset-scope restrictions. Confirm omitted Config paths/device identifiers remain optional under Schemastery; actual cordis-session presentation remains unverified.
 - Reject truncated or unsupported audio before import publication/transcription by checking RIFF/WAVE PCM structure and whole frames. Preserve independent device cleanup status/errors alongside transcription failures in the version-2 import result.

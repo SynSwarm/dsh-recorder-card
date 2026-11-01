@@ -38,6 +38,9 @@ const importOutput = {
     } },
     transcription: { type: "object", required: true, additionalProperties: false, properties: {
       status: { type: "string", enum: ["not-requested", "succeeded", "failed"], required: true },
+      provider: { type: "string", enum: ["dsh", "doubao"] }, recognizer: { type: "string" },
+      path: { type: "string" }, audioPath: { type: "string" }, audioSha256: { type: "string" },
+      reused: { type: "boolean" }, fallbackReason: { type: "string" },
       exitCode: { oneOf: [{ type: "integer" }, { type: "null" }] },
       error: { type: "object", additionalProperties: false, properties: {
         code: { type: "string", required: true }, message: { type: "string", required: true },
@@ -56,6 +59,8 @@ const errorCodes = {
   CliExitError: "RECORDER_CLI_FAILED", AbortError: "RECORDER_ABORTED",
   TimeoutError: "RECORDER_TIMEOUT", OutputLimitError: "RECORDER_OUTPUT_LIMIT",
   CleanupError: "RECORDER_CLEANUP_FAILED", ImportResultError: "RECORDER_IMPORT_RESULT_INVALID",
+  SettingsError: "RECORDER_SETTINGS_FAILED",
+  TranscriptionError: "RECORDER_TRANSCRIPTION_FAILED",
 };
 async function executeProcess(operation, run) {
   return executeOperation(operation, async () => {
@@ -83,7 +88,7 @@ export function registerRecorderTools(ctx, service) {
 
   ctx.tools.register(defineTool({
     name: "recorder_scan",
-    description: "Scan for AI recorder cards over BLE and list discovered devices.",
+    description: "Scan for AI recorder cards over BLE without device configuration. Use the card's Device settings input to save the selected identifier before status/list/record/import; the saved selection takes effect immediately.",
     parameters: {},
     output,
     async execute(_args, exec) {
@@ -131,10 +136,10 @@ export function registerRecorderTools(ctx, service) {
 
   ctx.tools.register(defineTool({
     name: "recorder_import",
-    description: "Import the first recording from the recorder card into archive/audio/, optionally transcribing it with the external CLI. Inspect status: partial means audio is saved but transcription failed or connection cleanup is unconfirmed; retry transcription only using the returned audio path.",
+    description: "Import the first recording into dataDir/archive/audio/, optionally transcribing it through the configured provider after BLE cleanup. The default uses DSH speechToText; only an absent service falls back to Doubao cloud ASR. Inspect status: partial means audio is saved but transcription failed or connection cleanup is unconfirmed; retry transcription only using the returned audio path.",
     parameters: {
-      outDir: { type: "string", description: "Destination directory relative to repoRoot; defaults to the configured outDir, or archive/audio." },
-      transcribe: { type: "boolean", description: "Transcribe after import via the external CLI; defaults to false." },
+      outDir: { type: "string", description: "Destination directory relative to dataDir; defaults to the configured outDir, or archive/audio." },
+      transcribe: { type: "boolean", description: "Transcribe after import using the configured provider; defaults to false. Doubao cloud fallback requires credentials and uploads audio." },
     },
     output: importOutput,
     async execute(args, exec) {
@@ -145,14 +150,19 @@ export function registerRecorderTools(ctx, service) {
 
   ctx.tools.register(defineTool({
     name: "recorder_transcribe",
-    description: "Transcribe an imported audio file via the external CLI. DSH speech-to-text integration is planned but not yet implemented.",
+    description: "Transcribe an imported PCM WAV through DSH speechToText and archive Markdown with its audio hash. Only an absent speechToText service falls back to Doubao cloud ASR; existing provider failures never fall back. Reuses verified matching transcripts unless forced.",
     parameters: {
-      file: { type: "string", required: true, description: "Audio file path relative to repoRoot." },
+      file: { type: "string", required: true, description: "Audio file path relative to dataDir, or an absolute path returned by recorder_import." },
       force: { type: "boolean", description: "Re-run transcription even when a valid transcript exists; defaults to false." },
     },
-    output,
+    output: { schema: { type: "object", additionalProperties: false, properties: {
+      status: { type: "string", enum: ["succeeded"], required: true },
+      provider: { type: "string", enum: ["dsh", "doubao"], required: true }, recognizer: { type: "string", required: true },
+      path: { type: "string", required: true }, audioPath: { type: "string", required: true }, audioSha256: { type: "string", required: true },
+      reused: { type: "boolean", required: true }, fallbackReason: { type: "string" },
+    } }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
     async execute(args, exec) {
-      return executeProcess("transcribe", () => service.transcribe(args.file, { force: args.force === true, signal: exec.signal }));
+      return executeOperation("transcribe", () => service.transcribe(args.file, { force: args.force === true, signal: exec.signal }));
     },
     presentCall: (args) => ({ card: "generic", title: "Transcribe recording", kind: "other", rawInput: args }),
   }));

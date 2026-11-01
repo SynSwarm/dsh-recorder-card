@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRecorderService, runProcess } from "../runtime/host-cli.js";
-import { apply } from "../index.js";
+import * as plugin from "../index.js";
+import { Context } from "@deepseek-ai/cordis";
 
 const integrity = { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 };
 const cleanup = { status: "succeeded", errors: [] };
@@ -81,7 +82,7 @@ test("device methods and scans serialize across service instances; failures rele
   assert.equal(results[0].status, "rejected");
   assert.equal(results[0].reason.name, "CliExitError");
   for (const result of results.slice(1)) assert.equal(result.status, "fulfilled");
-  assert.deepEqual(calls.map((args) => args.slice(4)), [
+  assert.deepEqual(calls.map((args) => args.slice(args.indexOf("--") + 1)), [
     ["--address", "test-device", "--status"], ["--scan"],
     ["--address", "test-device", "--record", "pause"],
     ["--address", "test-device", "--list"], ["--address", "test-device", "--record-state"],
@@ -139,14 +140,14 @@ test("standalone transcription does not occupy BLE queue but is cancelled on dis
   const calls = [];
   const service = createRecorderService({ repoRoot: await temp(t) }, { execute: (_cmd, args, options) => {
     calls.push(args);
-    return args[0].endsWith("qs668-transcribe.py") ? child("hold", path, options) : child("success", undefined, options);
+    return args.includes("--transcribe-file") ? child("hold", path, options) : child("success", undefined, options);
   } });
   t.after(() => service.dispose());
   const transcription = assert.rejects(service.transcribe("--input.wav", { force: true }), { name: "AbortError" });
   const pid = Number(await ready(path));
   assert.equal((await service.scan()).code, 0);
-  assert.equal(calls[0][2], "--force");
-  assert.ok(calls[0][1].endsWith("--input.wav"));
+  assert.equal(calls[0].at(-1), "--force");
+  assert.ok(calls[0][calls[0].indexOf("--transcribe-file") + 1].endsWith("--input.wav"));
   await service.dispose();
   await transcription;
   assertExited(pid);
@@ -192,7 +193,7 @@ test("termination failure reports an error and holds the device queue until actu
 test("invalid configuration and action arguments fail before starting any CLI", async () => {
   let calls = 0;
   const execute = async () => { calls++; return {}; };
-  for (const config of [{ python: "" }, { repoRoot: "" }, { cliTimeoutMs: 0 }, { cliTimeoutMs: Infinity }]) {
+  for (const config of [{ python: "" }, { repoRoot: 42 }, { dataDir: "" }, { cliTimeoutMs: 0 }, { cliTimeoutMs: Infinity }]) {
     assert.throws(() => createRecorderService(config, { execute }), TypeError);
   }
   const service = createRecorderService({}, { execute });
@@ -206,10 +207,11 @@ test("invalid configuration and action arguments fail before starting any CLI", 
   assert.equal(calls, 0);
 });
 
-test("import paths resolve under repoRoot and literal path arguments stay separate", async () => {
+test("import paths resolve under dataDir and literal path arguments stay separate", async () => {
   let invocation;
   const repoRoot = resolve("test checkout");
-  const service = createRecorderService({ repoRoot, python: "python with spaces", deviceAddress: "test-device" }, {
+  const dataDir = resolve("test data");
+  const service = createRecorderService({ repoRoot, dataDir, python: "python with spaces", deviceAddress: "test-device" }, {
     execute: async (...args) => {
       invocation = args;
       await writeImportReport(args[1], { status: "succeeded", exitCode: 0 });
@@ -219,16 +221,45 @@ test("import paths resolve under repoRoot and literal path arguments stay separa
   await service.importFirst("audio with spaces", true);
   assert.equal(invocation[0], "python with spaces");
   assert.deepEqual(invocation[1].slice(invocation[1].indexOf("--") + 1), ["--address", "test-device",
-    "--import-first", "--out", resolve(repoRoot, "audio with spaces"), "--transcribe"]);
+    "--import-first", "--out", resolve(dataDir, "audio with spaces"), "--transcribe"]);
   await service.dispose();
 });
 
-test("Host registers an awaitable disposal effect that closes its service", async () => {
-  const cleanups = [];
-  const service = apply({ tools: { register() {} }, skills: { registerProvider() {} }, effect(create) { cleanups.push(create()); } });
-  assert.equal(cleanups.length, 1);
-  await cleanups[0]();
+test("Host disposal closes its injectable recorder service", async (t) => {
+  const ctx = new Context();
+  ctx.provide("tools", { register() {} });
+  ctx.provide("skills", { registerProvider() {} });
+  const mounted = ctx.plugin(plugin, { dataDir: await temp(t) });
+  t.after(() => mounted.dispose());
+  await mounted;
+  const service = ctx.recorder;
+  await mounted.dispose();
   await assert.rejects(service.scan(), { name: "AbortError" });
+});
+
+test("default and empty repoRoot use bundled sources while data and transcription stay separate", async (t) => {
+  const dataDir = await temp(t);
+  const bundled = resolve(fileURLToPath(new URL("../vendor/upstream/", import.meta.url)));
+  for (const repoRoot of [undefined, ""]) {
+    const calls = [];
+    const service = createRecorderService({ repoRoot, dataDir }, { execute: async (_cmd, args, options) => {
+      calls.push({ args, cwd: options.cwd }); return { code: 0, out: "", err: "" };
+    } });
+    t.after(() => service.dispose());
+    await service.scan();
+    await service.transcribe("archive/audio/test.wav");
+    for (const { args, cwd } of calls) {
+      assert.equal(args[0], "-B");
+      assert.equal(args[args.indexOf("--repo-root") + 1], bundled);
+      assert.equal(args[args.indexOf("--data-dir") + 1], dataDir);
+      assert.equal(cwd, bundled);
+    }
+    assert.equal(calls[1].args[calls[1].args.indexOf("--transcribe-file") + 1], join(dataDir, "archive/audio/test.wav"));
+  }
+  assert.throws(() => createRecorderService({ dataDir: bundled }), /outside the CLI source/);
+  const service = createRecorderService({ dataDir, deviceAddress: "synthetic-device" });
+  t.after(() => service.dispose());
+  await assert.rejects(service.importFirst(join(bundled, "audio")), /outside the CLI source/);
 });
 
 async function writeImportReport(args, transcription, transform = value => value) {

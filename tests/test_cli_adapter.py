@@ -1,4 +1,4 @@
-"""Offline regressions; optional pinned-source cases use a local checkout, never BLE."""
+"""Offline regressions against bundled pinned sources; no BLE or cloud ASR."""
 import asyncio
 import contextlib
 import importlib.util
@@ -365,10 +365,7 @@ class DisconnectHistoryTests(unittest.IsolatedAsyncioTestCase):
 
 class PinnedSessionDisconnectTests(DisconnectHistoryTests):
     def session_class(self):
-        root = Path(os.environ.get("RECORDER_UPSTREAM_ROOT",
-            ADAPTER_PATH.parents[1] / ".cache/upstream/ai-recorder-card-open-protocol"))
-        if not root.is_dir() and "RECORDER_UPSTREAM_ROOT" not in os.environ:
-            self.skipTest("Set RECORDER_UPSTREAM_ROOT to run pinned upstream Session regressions")
+        root = Path(os.environ.get("RECORDER_UPSTREAM_ROOT", adapter.DEFAULT_REPO_ROOT))
         module = adapter.load_upstream(root)  # Verifies both pinned source hashes.
         # Keep the actual Session implementation; replace only its hardware factory.
         module.import_bleak = lambda: (None, None)
@@ -578,8 +575,14 @@ class TranscriptionTests(unittest.TestCase):
             audio.write_bytes(b"retained audio")
             report = adapter.ImportReport(root / "result.json")
             report.data["imports"].append({"status": "succeeded", "path": str(audio)})
-            with self.assertRaisesRegex(RuntimeError, "audio retained"):
-                adapter.checked_transcription(SimpleNamespace(ROOT=root, TOOLS_DIR=root / "tools"), audio, SimpleNamespace(), report)
+            run_process = subprocess.run
+            def simulated_transcriber(command, **options):
+                self.assertIn("--transcribe-file", command)
+                self.assertIn("--data-dir", command)
+                return run_process([sys.executable, str(root / "tools/qs668-transcribe.py")], **options)
+            with patch.object(adapter.subprocess, "run", side_effect=simulated_transcriber):
+                with self.assertRaisesRegex(RuntimeError, "audio retained"):
+                    adapter.checked_transcription(SimpleNamespace(ROOT=root, TOOLS_DIR=root / "tools"), audio, SimpleNamespace(), report)
             data = json.loads((root / "result.json").read_text(encoding="utf-8"))
             self.assertEqual(data["imports"][0]["status"], "succeeded")
             self.assertEqual(data["transcriptions"][0]["status"], "failed")
@@ -606,6 +609,73 @@ class TranscriptionTests(unittest.TestCase):
                     else:
                         adapter.checked_transcription(module, root / "audio.wav", SimpleNamespace(), report)
                 self.assertEqual(report.data["transcriptions"][0]["status"], expected)
+
+
+class BundledRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    def test_default_sources_work_from_unrelated_directory_without_python_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([sys.executable, "-S", "-B", str(ADAPTER_PATH), "--", "--help"],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--scan", result.stdout)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_missing_dependencies_name_same_interpreter_install_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "data"
+            for args, dependency in [(["--", "--scan"], "bleak"),
+                                     (["--transcribe-file", "synthetic.wav"], "requests")]:
+                with self.subTest(dependency=dependency):
+                    result = subprocess.run([sys.executable, "-S", "-B", str(ADAPTER_PATH),
+                        "--data-dir", str(data_dir), *args], cwd=directory, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(dependency, result.stderr)
+                    self.assertIn("-m pip install bleak requests", result.stderr)
+                    self.assertFalse(data_dir.exists())
+
+    def test_source_override_does_not_change_data_or_credentials_location(self):
+        module = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            adapter.configure_runtime(module, data_dir)
+            module.write_cached_address("synthetic-device")
+            self.assertEqual((data_dir / ".qs668-device").read_text().strip(), "synthetic-device")
+            self.assertEqual(module.DEFAULT_OUT, data_dir / "archive/audio")
+            self.assertEqual(module.TOOLS_DIR, adapter.DEFAULT_REPO_ROOT / "tools")
+            with patch.dict(sys.modules, {"requests": SimpleNamespace()}):
+                transcriber = adapter.load_transcriber(adapter.DEFAULT_REPO_ROOT)
+            adapter.configure_runtime(transcriber, data_dir)
+            self.assertEqual(transcriber.ENV_FILE, data_dir / ".env")
+            self.assertEqual(transcriber.DEFAULT_CORPUS_DIR, data_dir / "archive/corpus")
+
+    def test_sources_cannot_be_used_as_data_directory(self):
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = adapter.main(["--data-dir", str(adapter.DEFAULT_REPO_ROOT), "--", "--scan"])
+        self.assertEqual(code, 1)
+        self.assertIn("outside the CLI source", stderr.getvalue())
+
+    async def test_actual_bundled_import_preserves_existing_audio_and_rejects_truncation(self):
+        module = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            name = "test.wav"
+            old = out / f"{module.stem_from_name(name)}.wav"
+            old.write_bytes(b"existing audio")
+            for data, valid in [(pcm_audio(), True), (b"RIFF" + struct.pack("<I", 1000) + b"WAVE", False)]:
+                report = adapter.ImportReport()
+                session = Session(frame(2, 3, name.encode()), frame(2, 4, data), frame(2, 5, b"\0"))
+                session.seq = 0
+                if valid:
+                    path = await adapter.safe_import_file(module.import_file, session, name, out, report)
+                    self.assertEqual(path.read_bytes(), data)
+                    self.assertNotEqual(path, old)
+                    self.assertEqual(report.data["imports"][0]["integrity"]["status"], "verified")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "integrity unconfirmed"):
+                        await adapter.safe_import_file(module.import_file, session, name, out, report)
+                    self.assertEqual(report.data["imports"], [])
+                self.assertEqual(old.read_bytes(), b"existing audio")
+            self.assertFalse(list(out.glob(".recorder-import-*")))
 
 
 class SourceValidationTests(unittest.TestCase):

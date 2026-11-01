@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/nextproto1024/ai-recorder-card-open-protocol",
+  "commit": "de42d1fbf19fc92064ac4688f71f42730c82267f",
+  "hashNormalization": "CRLF to LF",
+  "files": {
+    "tools/qs668-bringup.py": "6cc048293781a0fb2baa40d5c05f6c4fad7e3ae0ef847289b08b5a2a21707efb",
+    "tools/qs668_protocol.py": "c18c7a846dfa7aa9714f08fe219e21a2e4e02bdb03b6125409e97b10baa41cb8",
+    "tools/qs668-transcribe.py": "83300e08465371f8ca8c288e07f54b4808100a6c6b91c72207f1f404dc8af1da",
+    "tools/requirements.txt": "72b35a8b34b04a8ba8cea3d8e686f7a3ccfedbe70071f77c065c5ada192cdf42",
+    "LICENSE": "66dbdb2e530c0f69e03fc791fecfa5ebcfd0cbc97fbf7aafe36cc74ce849ae83"
+  }
+}

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import Tools, { TOOL_ABORTED_BEFORE_DISPATCH } from "@deepseek-ai/dsh-tools";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
@@ -7,6 +10,11 @@ import Skills from "@deepseek-ai/dsh-skill";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import * as plugin from "../index.js";
 import { registerRecorderTools } from "../runtime/tools.js";
+import Typert from "@deepseek-ai/dsh-typert-registry";
+import Gateway from "@deepseek-ai/dsh-api-gateway";
+import { TYPERT } from "../typert.host.js";
+
+const transcriptResult = { status: "succeeded", provider: "dsh", recognizer: "test", path: "corpus.md", audioPath: "saved-test.wav", audioSha256: "a".repeat(64), reused: false };
 
 const integrity = { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 };
 const cleanup = { status: "succeeded", errors: [] };
@@ -14,8 +22,10 @@ const cleanup = { status: "succeeded", errors: [] };
 async function runtime(t, service) {
   const ctx = new Context();
   const mounts = [];
-  t.after(async () => { for (const mount of mounts.reverse()) await mount.dispose(); });
+  const dataDir = await mkdtemp(join(tmpdir(), "recorder-tools-settings-"));
+  t.after(async () => { for (const mount of mounts.reverse()) await mount.dispose(); await rm(dataDir, { recursive: true, force: true }); });
   async function mount(value, config = {}) {
+    if (value === plugin) config = { dataDir, ...config };
     const fiber = ctx.plugin(value, config);
     mounts.push(fiber);
     await fiber;
@@ -35,12 +45,12 @@ async function runtime(t, service) {
 function stub() {
   const calls = [];
   const service = Object.fromEntries(["scan", "status", "list", "recordState", "record", "importFirst", "transcribe"].map(
-    name => [name, async (...args) => { calls.push({ name, args }); return { code: 0, out: `output:${name}`, err: "" }; }],
+    name => [name, async (...args) => { calls.push({ name, args }); return name === "transcribe" ? transcriptResult : { code: 0, out: `output:${name}`, err: "" }; }],
   ));
   service.importFirst = async (...args) => {
     calls.push({ name: "importFirst", args });
     return { status: "succeeded", cleanup, import: { status: "succeeded", path: "test.wav", bytes: 10, sha256: "a".repeat(64), integrity },
-      transcription: args[1] ? { status: "succeeded", exitCode: 0 } : { status: "not-requested" } };
+      transcription: args[1] ? { ...transcriptResult, exitCode: 0 } : { status: "not-requested" } };
   };
   return { calls, service };
 }
@@ -59,6 +69,28 @@ test("real Cordis/DSH registry loads and disposes the six tools and Skill withou
   await mount(plugin);
   assert.equal(ctx.tools.schemas().length, 6);
   assert.equal((await ctx.skills.list()).length, 1);
+});
+
+test("plugin tools and Remote use the same configured recorder Service and unload together", async t => {
+  const { ctx, mount, execute } = await runtime(t);
+  await mount(Typert);
+  await mount(Gateway);
+  await mount({ inject: ["typert"], apply: ctx => { ctx.typert.register(TYPERT); } });
+  const fiber = await mount(plugin, { python: "unused-test-python" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(ctx.recorderController);
+  let count = 0;
+  ctx.recorder.cli.scan = async () => { count++; return { code: 0, out: "shared", err: "" }; };
+  const tool = await execute("recorder_scan");
+  assert.equal(tool.isError, false);
+  const remote = await ctx.typertGateway.dispatchRpc("recorder/scan", { args: {} });
+  assert.equal(remote.ok, true);
+  assert.equal(remote.value.out, "shared");
+  assert.equal(count, 2);
+  await fiber.dispose();
+  assert.equal(ctx.get("recorder"), undefined);
+  assert.equal(ctx.get("recorderController"), undefined);
+  assert.equal(ctx.tools.schemas().length, 0);
 });
 
 test("Host tools are inherited and callable in an agent scope without device access", async (t) => {
@@ -134,6 +166,8 @@ test("every tool maps arguments and signal correctly and returns a validated pro
       assert.equal(result.value.status, "succeeded");
       assert.equal(result.value.import.status, "succeeded");
       assert.equal(result.value.transcription.status, args.transcribe ? "succeeded" : "not-requested");
+    } else if (method === "transcribe") {
+      assert.deepEqual(result.value, transcriptResult);
     } else {
       assert.equal(result.value.completion, "process-exited");
       assert.equal(result.value.exitCode, 0);
@@ -211,6 +245,9 @@ test("plugin Config validates timeout and path types and preserves configured ou
   const defaults = plugin.Config({});
   assert.equal(defaults.repoRoot, undefined);
   assert.equal(defaults.deviceAddress, undefined);
+  assert.equal(defaults.transcriptionProvider, "dsh");
+  assert.equal(plugin.Config({ transcriptionProvider: "doubao" }).transcriptionProvider, "doubao");
+  assert.throws(() => plugin.Config({ transcriptionProvider: "unsupported" }));
   assert.equal(plugin.Config({ outDir: "custom-output" }).outDir, "custom-output");
   for (const config of [{ python: 1 }, { deviceAddress: 42 }, { cliTimeoutMs: 0 }, { cliTimeoutMs: 1.5 }]) {
     assert.throws(() => plugin.Config(config));

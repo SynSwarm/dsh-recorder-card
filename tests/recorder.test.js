@@ -81,7 +81,8 @@ function deferred() {
 // Flush promise continuations without advancing the component's fake timers.
 const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
 
-// A small hook/element harness executes the actual registered Card, without
+// Historical Web Bluetooth fixture only; production Card is tested in client.test.js.
+// A small hook/element harness executes the retired Card, without
 // installing React or a DSH runtime. It does not substitute for browser tests.
 function mountCard(devices) {
   let cursor = 0;
@@ -122,7 +123,7 @@ function mountCard(devices) {
       });
     },
   };
-  vm.runInNewContext(readFileSync(new URL("../client.js", import.meta.url), "utf8"), {
+  vm.runInNewContext(readFileSync(new URL("./fixtures/legacy-web-bluetooth.js", import.meta.url), "utf8"), {
     window: { __ModuleLoader__: { load(module) {
       module.factory(() => React).apply({ slots: {
         inject(_name, register) { register(); },
@@ -152,7 +153,7 @@ function mountCard(devices) {
   render();
   return {
     text,
-    button(label) { return nodes().find((node) => node.type === "button" && text(node) === label); },
+    button(label) { return nodes().find((node) => node.type === "button" && (node.props["aria-label"] ?? text(node)) === label); },
     async click(label) {
       const button = this.button(label);
       assert.ok(button, `Missing button: ${label}`);

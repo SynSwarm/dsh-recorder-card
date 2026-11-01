@@ -11,6 +11,8 @@ archive/corpus/*
 
 # ---- BLE 设备地址缓存 ----
 .qs668-device
+recorder-settings.json
+.recorder-settings-*.tmp
 
 # ---- Node ----
 node_modules/

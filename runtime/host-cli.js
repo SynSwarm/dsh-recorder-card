@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
-import { resolve, join, relative, isAbsolute } from "node:path";
+import { resolve, join, relative, isAbsolute, sep } from "node:path";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 190_000; // Adapter: 180 seconds + disconnect/startup allowance.
@@ -93,7 +93,7 @@ export function runProcess(command, args, {
     };
     child.stdout.on("data", (chunk) => capture(stdout, chunk));
     child.stderr.on("data", (chunk) => capture(stderr, chunk));
-    child.on("error", (error) => { problem ??= failure("CliSpawnError", "Could not start recorder CLI; check interpreter and repoRoot", { cause: error }); });
+    child.on("error", (error) => { problem ??= failure("CliSpawnError", "Could not start recorder CLI. Install Python 3.11+ and configure the plugin's python executable; also check repoRoot if overriding bundled sources", { cause: error }); });
     child.on("close", async (code, exitSignal) => {
       isClosed = true;
       clearTimeout(timer);
@@ -183,7 +183,19 @@ function importOutcome(report, outDir, requested) {
 
 export function createRecorderService(config = {}, { execute = runProcess } = {}) {
   const python = text(config.python ?? "python", "python");
-  const repoRoot = resolve(text(config.repoRoot ?? process.cwd(), "repoRoot"));
+  const bundledRoot = fileURLToPath(new URL("../vendor/upstream/", import.meta.url));
+  const repoRoot = resolve(text(config.repoRoot === "" ? bundledRoot : config.repoRoot ?? bundledRoot, "repoRoot"));
+  const dataDir = resolve(text(config.dataDir ?? join(homedir(), ".dsh-recorder-card"), "dataDir"));
+  const outsideSource = (path) => {
+    for (const source of [repoRoot, bundledRoot]) {
+      const local = relative(source, path);
+      if (!local || (!isAbsolute(local) && local !== ".." && !local.startsWith(`..${sep}`))) {
+        throw new TypeError("Data paths must be outside the CLI source directory; configure dataDir/outDir");
+      }
+    }
+    return path;
+  };
+  outsideSource(dataDir);
   const timeoutMs = positiveInteger(config.cliTimeoutMs ?? DEFAULT_TIMEOUT_MS, "cliTimeoutMs");
   const adapter = fileURLToPath(new URL("./recorder_cli.py", import.meta.url));
   const lifetime = new AbortController();
@@ -197,7 +209,7 @@ export function createRecorderService(config = {}, { execute = runProcess } = {}
   function run(script, args, options = {}, device = true) {
     const signal = options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal;
     if (signal.aborted) return Promise.reject(cancelled());
-    const invoke = () => execute(python, [script, ...args], { cwd: repoRoot, signal, timeoutMs });
+    const invoke = () => execute(python, ["-B", script, ...args], { cwd: repoRoot, signal, timeoutMs });
     const promise = device ? enqueueDevice(invoke, signal) : Promise.resolve().then(() => {
       if (signal.aborted) throw cancelled();
       return invoke();
@@ -213,8 +225,9 @@ export function createRecorderService(config = {}, { execute = runProcess } = {}
     });
     return promise;
   }
-  const bringup = (args, options, adapterArgs = []) => run(adapter, ["--repo-root", repoRoot, ...adapterArgs, "--", ...args], options);
+  const bringup = (args, options, adapterArgs = []) => run(adapter, ["--repo-root", repoRoot, "--data-dir", dataDir, ...adapterArgs, "--", ...args], options);
   return {
+    dataDir,
     async scan(options) { return bringup(["--scan"], options); },
     async status(options) { return bringup(deviceArgs("--status"), options); },
     async list(options) { return bringup(deviceArgs("--list"), options); },
@@ -225,7 +238,7 @@ export function createRecorderService(config = {}, { execute = runProcess } = {}
     },
     async importFirst(outDir = config.outDir ?? "archive/audio", transcribeFlag = false, options) {
       if (typeof transcribeFlag !== "boolean") throw new TypeError("transcribeFlag must be boolean");
-      const destination = resolve(repoRoot, text(outDir, "outDir"));
+      const destination = outsideSource(resolve(dataDir, text(outDir, "outDir")));
       const args = deviceArgs("--import-first", "--out", destination);
       if (transcribeFlag) args.push("--transcribe");
       const reportDir = await mkdtemp(join(tmpdir(), "recorder-result-"));
@@ -254,11 +267,17 @@ export function createRecorderService(config = {}, { execute = runProcess } = {}
         await rm(reportDir, { recursive: true, force: true });
       }
     },
-    async transcribe(file, { force = false, signal } = {}) {
+    async transcribe(file, { force = false, signal, provider, outDir } = {}) {
       if (typeof force !== "boolean") throw new TypeError("force must be boolean");
-      const args = [resolve(repoRoot, text(file, "file"))];
+      const audio = resolve(dataDir, text(file, "file"));
+      const args = [];
+      if (provider !== undefined) {
+        if (provider !== "doubao") throw new TypeError("Unsupported CLI transcription provider");
+        args.push("--provider", provider);
+      }
+      if (outDir !== undefined) args.push("--out-dir", outsideSource(resolve(dataDir, text(outDir, "outDir"))));
       if (force) args.push("--force");
-      return run(join(repoRoot, "tools", "qs668-transcribe.py"), args, { signal }, false);
+      return run(adapter, ["--repo-root", repoRoot, "--data-dir", dataDir, "--transcribe-file", audio, "--", ...args], { signal }, false);
     },
     async dispose() {
       lifetime.abort();

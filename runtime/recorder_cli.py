@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Confirmed-response adapter for a separately installed, pinned QS668 CLI.
+"""Confirmed-response adapter for the bundled, pinned QS668 CLI.
 
-The upstream CLI remains external. See skill/references/runtime.md for usage.
+See skill/references/runtime.md for setup and developer source overrides.
 Protocol behavior follows NextProto, Copyright (c) 2026 NextProto (MIT).
 Full upstream notice: ../vendor/LICENSE
 """
@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import hashlib
 import importlib.util
+import importlib
 import math
 import json
 import os
@@ -27,6 +28,41 @@ SOURCE_HASHES = {
     "tools/qs668-bringup.py": "6cc048293781a0fb2baa40d5c05f6c4fad7e3ae0ef847289b08b5a2a21707efb",
     "tools/qs668_protocol.py": "c18c7a846dfa7aa9714f08fe219e21a2e4e02bdb03b6125409e97b10baa41cb8",
 }
+TRANSCRIBE_HASH = "83300e08465371f8ca8c288e07f54b4808100a6c6b91c72207f1f404dc8af1da"
+DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "upstream"
+DEFAULT_DATA_DIR = Path.home() / ".dsh-recorder-card"
+# Source trees may be read-only. Never create Python caches beside bundled code.
+sys.dont_write_bytecode = True
+
+
+def require_dependency(name):
+    try:
+        return importlib.import_module(name)
+    except ImportError as error:
+        raise RuntimeError(f"Python dependency {name!r} is missing or broken. "
+                           f'Run "{sys.executable}" -m pip install bleak requests '
+                           "using the same interpreter configured in the plugin's python field.") from error
+
+
+def configure_runtime(module, data_dir):
+    module.ROOT = data_dir
+    module.DEFAULT_OUT = data_dir / "archive" / "audio"
+    module.DEFAULT_AUDIO_DIR = module.DEFAULT_OUT
+    module.DEFAULT_CORPUS_DIR = data_dir / "archive" / "corpus"
+    module.DEVICE_CACHE = data_dir / ".qs668-device"
+    module.ENV_FILE = data_dir / ".env"
+
+
+def load_transcriber(repo_root):
+    path = repo_root / "tools" / "qs668-transcribe.py"
+    if hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest() != TRANSCRIBE_HASH:
+        raise RuntimeError(f"Unsupported upstream transcription source; expected {UPSTREAM_COMMIT}")
+    require_dependency("requests")
+    spec = importlib.util.spec_from_file_location("recorder_transcriber", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # Required by upstream dataclass declarations.
+    spec.loader.exec_module(module)
+    return module
 
 
 class UnconfirmedResponse(RuntimeError):
@@ -241,8 +277,9 @@ def checked_transcription(upstream, audio_path, args, report, *, timeout=120):
     item = {"status": "running", "audioPath": str(audio_path), "exitCode": None}
     report.data["transcriptions"].append(item)
     report.save()
-    command = [sys.executable, str(upstream.TOOLS_DIR / "qs668-transcribe.py"),
-               str(audio_path), "--out-dir", str(upstream.ROOT / "archive" / "corpus")]
+    command = [sys.executable, "-B", str(Path(__file__).resolve()),
+               "--repo-root", str(upstream.TOOLS_DIR.parent), "--data-dir", str(upstream.ROOT),
+               "--transcribe-file", str(audio_path), "--", "--out-dir", str(upstream.ROOT / "archive" / "corpus")]
     for key in ("title", "customer"):
         if getattr(args, key, ""):
             command.extend([f"--{key}", getattr(args, key)])
@@ -341,7 +378,10 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, required=True, help="External checkout at the documented pinned revision")
+    parser.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT, help="Pinned CLI source; defaults to bundled vendor/upstream")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Writable user data directory; never the CLI source directory")
+    parser.add_argument("--check-deps", action="store_true", help="Check bundled sources and Python dependencies without accessing Bluetooth")
+    parser.add_argument("--transcribe-file", type=Path, help="Transcribe an existing audio file without opening a BLE session")
     parser.add_argument("--timeout", type=float, default=180.0, help="Total CLI operation timeout in seconds (default: 180)")
     parser.add_argument("--result-file", type=Path, help="Private JSON import/transcription result file")
     parser.add_argument("cli_args", nargs=argparse.REMAINDER, help="Use -- before upstream CLI arguments")
@@ -351,9 +391,31 @@ def main(argv=None):
     cli_args = args.cli_args[1:] if args.cli_args[:1] == ["--"] else args.cli_args
     original_argv = sys.argv
     try:
-        upstream = load_upstream(args.repo_root)
+        if sys.version_info < (3, 11):
+            raise RuntimeError("Python 3.11 or newer is required; set the plugin's python field to that interpreter")
+        repo_root = args.repo_root.resolve()
+        data_dir = args.data_dir.resolve()
+        if data_dir.is_relative_to(repo_root):
+            raise RuntimeError("dataDir must be outside the CLI source directory")
+        if args.check_deps:
+            load_upstream(repo_root)
+            require_dependency("bleak")
+            load_transcriber(repo_root)
+            print("OK pinned CLI sources and Python dependencies (bleak, requests); no Bluetooth access")
+            return 0
+        if args.transcribe_file is not None:
+            upstream = load_transcriber(repo_root)
+            configure_runtime(upstream, data_dir)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            sys.argv = [str(repo_root / "tools/qs668-transcribe.py"), str(args.transcribe_file.resolve()), *cli_args]
+            return upstream.main()
+        upstream = load_upstream(repo_root)
+        configure_runtime(upstream, data_dir)
+        if "--help" not in cli_args and "-h" not in cli_args:
+            require_dependency("bleak")
+            data_dir.mkdir(parents=True, exist_ok=True)
         install_guards(upstream, operation_timeout=args.timeout, report=ImportReport(args.result_file))
-        sys.argv = [str(args.repo_root / "tools/qs668-bringup.py"), *cli_args]
+        sys.argv = [str(repo_root / "tools/qs668-bringup.py"), *cli_args]
         return upstream.main()
     except KeyboardInterrupt:
         print("ERR cancelled; verify device state before retrying", file=sys.stderr)
