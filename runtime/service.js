@@ -29,8 +29,22 @@ export class RecorderService extends Service {
   }
 
   scan(options) { return this.cli.scan(options); }
+  connectionState() { return this.cli.connectionState(); }
+  disconnect() { return this.cli.disconnect(); }
+  async connect(address, options) {
+    if (address !== undefined) {
+      await this.cli.disconnect();
+      await this.settings.saveDevice(address, options);
+    } else await this.getDevice(options);
+    const result = await this.cli.connect(options);
+    if (result.status === "connected" && result.address) {
+      try { await this.settings.saveDevice(result.address, options); }
+      catch (error) { await this.cli.disconnect(); throw error; }
+    }
+    return result;
+  }
   getDevice(options) { return this.settings.getDevice(options); }
-  saveDevice(address, options) { return this.settings.saveDevice(address, options); }
+  async saveDevice(address, options) { await this.cli.disconnect(); return this.settings.saveDevice(address, options); }
   async status(options) { await this.getDevice(options); return this.cli.status(options); }
   async list(options) { await this.getDevice(options); return this.cli.list(options); }
   async recordState(options) { await this.getDevice(options); return this.cli.recordState(options); }
@@ -38,7 +52,8 @@ export class RecorderService extends Service {
   async importFirst(outDir, transcribe = false, options) {
     if (typeof transcribe !== "boolean") throw new TypeError("transcribe must be boolean");
     await this.getDevice(options);
-    // Import/cleanup completes and releases BLE before any ASR backend is called.
+    // Import finishes before ASR. An explicitly connected session remains owned
+    // by Host (cleanup=retained); a one-shot CLI operation releases BLE.
     const result = await this.cli.importFirst(outDir, false, options);
     if (!transcribe) return result;
     try {

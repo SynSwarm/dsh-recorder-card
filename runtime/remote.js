@@ -26,6 +26,9 @@ export default class RecorderController extends TypertRemoteService {
     for (const initialize of initializers) initialize.call(this);
   }
   scan(signal) { return call("scan", () => this.ctx.recorder.scan({ signal })); }
+  connect(address, signal) { return call("connect", () => this.ctx.recorder.connect(address, { signal })); }
+  disconnect(signal) { return call("disconnect", () => this.ctx.recorder.disconnect({ signal })); }
+  connectionState(signal) { return call("connectionState", () => this.ctx.recorder.connectionState({ signal })); }
   getDevice(signal) { return call("getDevice", () => this.ctx.recorder.getDevice({ signal })); }
   saveDevice(address, signal) { return call("saveDevice", () => this.ctx.recorder.saveDevice(address, { signal })); }
   status(signal) { return call("status", () => this.ctx.recorder.status({ signal })); }
@@ -42,7 +45,7 @@ export default class RecorderController extends TypertRemoteService {
 
 // Apply the public stage-3 decorator contract in plain JS; no transpiler helpers
 // or private metadata keys. These initializers run after super(), as in TS output.
-for (const name of ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice"]) {
+for (const name of ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"]) {
   Remote(RecorderController.prototype[name], {
     kind: "method", name, static: false, private: false,
     addInitializer: fn => initializers.push(fn),

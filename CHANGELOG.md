@@ -4,6 +4,19 @@ Record completed repository changes here. Future work and acceptance criteria li
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbering follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Version `0.1.0` is recorded as an npm development-preview release; publication does not establish DSH or hardware compatibility.
 
+## [0.4.0] - 2026-11-01
+
+- Replace the expanding toolbar card with one connection icon and scoped conversation guidance, preserving composer drafts. Keep import, recording and transcription behind explicit conversation requests; expose disconnect/switch in a compact context menu.
+- Add persistent Host BLE sessions and recorder_connect / recorder_disconnect tools. Reuse serialized device operations and distinguish intentionally retained connections from confirmed release in import results.
+- Retire workers after unexpected disconnects; close stdin and wait for process/pipe closure before releasing the shared queue. Cancel unsent requests promptly without interrupting the active request.
+- Preserve cleanup-unconfirmed terminal states, including idle cleanup failures and abnormal worker exits. Return CleanupError to affected queued callers before more BLE work, and retain warnings through Remote and the UI.
+- Clarify DSH speech package availability, active-profile services and model readiness. Keep development-preview limitations and remaining physical-device acceptance explicit.
+
+## [0.3.1] - 2026-11-01
+
+- Recheck current audio bytes before returning cached transcripts or publishing archives; changed, truncated or removed inputs cannot succeed with a stale fingerprint.
+- Reuse recognized text across moved/copied audio by publishing a separate archive bound to the current path and title. Preserve original archives and filename-derived timing provenance; prefer an existing archive for the exact current path.
+
 ## [0.3.0] - 2026-11-01
 
 - Bundle pinned upstream Python CLI sources and their MIT notice; remove the default external checkout requirement. Python dependencies still need one-time installation.
@@ -12,14 +25,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - Implement default DSH speech-to-text, absent-service-only Doubao fallback, fingerprint-linked Markdown reuse, non-overwriting forced results and retained-audio failures. Verify real Host Gateway SenseVoice inference and Agent tool reuse; complete M4 acceptance remains pending.
 - Validate the real DSH Web Client in Creator (`cordis`) mode; detailed evidence and hardware limits are recorded in `docs/client-host-remote.md`.
 
-## [Unreleased]
+## Historical implementation notes (release allocation pending)
 
-### Fixed after 0.3.0
-
-- Recheck current audio bytes before returning cached transcripts or publishing archives; changed, truncated or removed inputs cannot succeed with a stale fingerprint.
-- Reuse recognized text across moved/copied audio by publishing a separate archive bound to the current path and title. Preserve original archives and filename-derived timing provenance; prefer an existing archive for the exact current path. These fixes are not included in npm 0.3.0.
-
-The existing entries below describe completed repository work. Their allocation to `0.1.0` or a subsequent release is pending comparison with the published tarball; they must not be read as a verified diff from `0.1.0`. Once that comparison is available, move shipped changes to the versioned entry and leave only later work here.
+The notes below preserve earlier repository history. Some overlap the versioned entries above; allocation to early releases still requires comparison with their published tarballs. They are not additional unreleased features.
 
 ### Added
 

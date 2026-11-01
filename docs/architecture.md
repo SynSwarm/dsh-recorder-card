@@ -7,7 +7,7 @@
 | 部分 | 执行位置 | 已有代码 | 尚缺部分 |
 |---|---|---|---|
 | Client | 打开 DSH 页面的浏览器 | 宿主 React、会话活动 Slot、Typert Remote 调用；不持有 BLE | Web 创造模式已验证配置/扫描/首条导入；Electron、暗色主题与异常场景待验收 |
-| Host | DSH 的 Node 运行时所在机器 | Skill、六个工具及 Remote，共用 recorder Service、CLI 队列与子进程管理 | 完整实机工具/卡片验收 |
+| Host | DSH 的 Node 运行时所在机器 | Skill、八个工具及 Remote，共用 recorder Service、CLI 队列与子进程管理 | 完整实机工具/卡片验收 |
 | Python CLI | Host 的 Python 3.11+ | 固定源码包含在 vendor/upstream；适配器校验哈希并分离数据目录 | Python/Bleak/requests 安装、平台与设备验收 |
 | Skill | DSH 提供给 Agent 的内容 | 能力检查、资源定位及操作约束；M1 发现/访问通过 | 后续硬件工作流验证 |
 
@@ -17,11 +17,13 @@
 
 当前 Client 路径：浏览器卡片 → Typert Remote → `recorderController` → `recorder` Service → Host Python CLI → 设备。Agent 工具和卡片使用主插件同一份配置与服务实例。`./typert` 暴露 Host 描述符，由官方 Loader 自动注册；客户端挂载含 `descriptors` 的贡献，处理 `{ ok, value/error }` 返回值。详见[Remote 设计与验证](client-host-remote.md)。
 
-图标执行 Host 扫描，不打开 Web Bluetooth 选择器，不代表持续连接。扫描后可在卡片“设置设备”中保存地址，立即生效并持久化到 dataDir/recorder-settings.json；保存值优先于旧 Config.deviceAddress，空值可清除选择。既有排队操作保留发起时的地址。卡片支持状态/列表文本、录音控制、首条导入、可选转写及已保存音频的转写重试；不支持选取任意录音或实时进度。`status()` 是独立设备操作，不用于扫描进度轮询。所有方法将最终 `signal` 传给服务；取消和卸载会终止对应调用，不能等同于设备录音已停止或保存。
+0.4.0 实现单图标交互。点击通过 Host 连接已保存设备；首次使用扫描唯一设备并自动保存，多设备在对话中选择。Host 用独立 `recorder_worker.py` 保持上游 Session；确认连接才变绿，断线由 Bleak 回调更新。Client 每 1.5 秒读取内存 `connectionState()`，不轮询 BLE `status()`。后续列表、录音、首条导入、转写通过 Agent 工具执行；右键可断开或切换。引导使用官方 `sessions.scope(sessionId).get("conversation").send(text)`，不改草稿、不伪造回复。图标挂在列表 Slot `conversation.input.left`，不占用语音输入 activity。组件卸载取消未完成请求；共享已连接会话持续到主动断开、故障或 Host 插件卸载。
+
+持续会话期间操作串行，整个会话持有同模块 BLE 队列；其他 Service 实例不能绕过它启动 CLI。失败、超时或取消后的会话被关闭，不复用有歧义的通知流。安全导入继续校验内容、原子发布；`cleanup: retained` 明确表示 Host 有意持有连接，和释放成功/释放未确认分开。没有显式连接时，既有一次性 CLI 工具路径保留。连接选择写到 dataDir/recorder-settings.json，保存值优先于旧 Config.deviceAddress；切换设备先释放原连接。
 
 旧浏览器直连实现迁入 `tests/fixtures/legacy-web-bluetooth.js`，不随 npm 包分发。保留的测试覆盖 DataView、列表超时/迟到帧、GATT 写入队列和会话清理，仅作历史回归，不证明新 Remote UI 的硬件行为。其 1.2 秒列表策略与浏览器连接交接不再适用于当前 Client 入口。
 
-当前 Host 设备路径：内部服务方法 → 随包 `runtime/recorder_cli.py` → 经源码哈希校验的随包 CLI。DSH 转写直接使用 Host speechToText；豆包回退通过适配器校验脚本并定位数据目录。`apply()` 使用 [工具适配层](../runtime/tools.js) 注册六个 `recorder_*` 工具；已在真实 DSH 注册表验证发现、错误和启停。Client 通信已接入相同服务；扫描/状态/列表/录音 Remote 的进程结果为 `{ code, out, err }`，业务失败保留 `RemoteError` 错误码。以下为 Agent 工具结果：除导入及转写工作流外，成功值包含 `operation`、`completion: process-exited`、`exitCode`、`stdout`、`stderr`，失败走 DSH 的 `isError` 通道并保留稳定错误码（如 `RECORDER_CONFIG_OR_ARGUMENT`、`RECORDER_CLI_FAILED`、`RECORDER_TIMEOUT`、`RECORDER_CLEANUP_FAILED`），不把非零退出或不完整列表包装为成功。进程退出不等于状态字段、音频完整性或端到端验收通过。
+当前 Host 设备路径：内部服务方法 → 随包 `runtime/recorder_cli.py` → 经源码哈希校验的随包 CLI。DSH 转写直接使用 Host speechToText；豆包回退通过适配器校验脚本并定位数据目录。`apply()` 使用 [工具适配层](../runtime/tools.js) 注册八个 `recorder_*` 工具；已在真实 DSH 注册表验证发现、错误和启停。Client 通信已接入相同服务；扫描/状态/列表/录音 Remote 的进程结果为 `{ code, out, err }`，业务失败保留 `RemoteError` 错误码。以下为 Agent 工具结果：除连接管理、导入及转写工作流外，成功值包含 `operation`、`completion: operation-completed`、`exitCode`、`stdout`、`stderr`，失败走 DSH 的 `isError` 通道并保留稳定错误码（如 `RECORDER_CONFIG_OR_ARGUMENT`、`RECORDER_CLI_FAILED`、`RECORDER_TIMEOUT`、`RECORDER_CLEANUP_FAILED`），不把非零退出或不完整列表包装为成功。进程退出不等于状态字段、音频完整性或端到端验收通过。
 
 导入单独返回 `{ status, import, transcription, cleanup }`：`import` 包含成功状态、实际路径、字节数、SHA-256 与 PCM 结构验证信息；转写失败时整体为 `partial`，转写项包含错误码、信息及仅重试转写的工具参数。该已报告的部分结果可以是 DSH `isError: false`，调用方必须检查工作流与阶段状态，不能当作全流程成功。导入失败或结果文件不可信仍走错误通道。导入与清理状态来自适配器独立 version-2 JSON 文件；转写状态来自归档管线，不解析日志中的 WARN/DONE。`cleanup` 独立记录连接释放状态与错误；转写失败和清理失败同时发生时均保留，清理未确认也使整体为 `partial`，不能视为设备已释放。
 
@@ -31,7 +33,7 @@
 
 当前卡片与 Agent 工具均通过 Host 队列，不会创建额外浏览器 BLE 连接。手机、其他浏览器直连页面和外部 CLI 仍需先断开，避免抢占设备。
 
-Host 的 [CLI 管理层](../runtime/host-cli.js)在同一个加载模块内共享单一设备队列，保守地串行执行所有设备调用（包括扫描、导入和不同服务实例的请求）。每次调用仍启动独立 Python 子进程；只有进程及其输出管道关闭、终止尝试结束后才释放队列。排队中取消不会启动进程；失败不会自动重试录音命令。独立转写不占用 BLE 队列，但纳入同一实例的停用清理。
+Host 的 [CLI 管理层](../runtime/host-cli.js)在同一个加载模块内共享单一设备队列。显式连接时复用持续 worker；未显式连接时保留每次调用独立 Python 子进程的路径。只有进程及输出管道关闭、终止尝试结束后才释放全局队列。排队中取消不会启动进程；失败不会自动重试录音命令。独立转写不占用 BLE 队列，但纳入同一实例的停用清理。
 
 方法接受 `AbortSignal`；`ctx.effect` 注册的异步清理会取消该实例的排队请求、终止运行中的进程，并等待退出。Host 默认运行时限为 190 秒（从启动算起，不含排队），输出捕获上限为 stdout/stderr 合计 8 MiB。Windows 使用 `taskkill /T /F`，POSIX 使用独立进程组的 SIGTERM，1 秒后再发 SIGKILL。若系统拒绝终止且进程仍未关闭，返回 `CleanupError`，队列继续阻塞直到实际退出，停用也不能报告清理成功。正常路径由 Python 适配器尝试断开连接；Host 强制终止不保证执行 Python 的 finally，更不等于设备停止/保存录音或回滚导入。取消或超时后须检查设备状态及部分输出，不能盲目重试。
 
@@ -60,7 +62,7 @@ M2a 后续固定了 CLI/规范参考 commit `de42d1fbf19fc92064ac4688f71f42730c8
 | `python` | `python` | 传给 `spawn` 的解释器路径/命令，需要在 Host 环境可用 |
 | `repoRoot` | 包内 `vendor/upstream/` | 可选开发者覆盖；缺省或空字符串使用随包固定源码，不作为数据目录 |
 | `dataDir` | Host 用户目录 `~/.dsh-recorder-card` | 用户数据、设备缓存与可选 ASR `.env`；不能位于 CLI 源码目录内 |
-| `deviceAddress` | 无 | 除扫描和转写外必须配置非空值；缺少时在启动进程前报错，不使用上游缓存 |
+| `deviceAddress` | 无 | 高级回退地址；图标或 recorder_connect 自动发现并保存设备后无需手工配置。一次性设备调用仍需要已保存/配置的地址 |
 | `outDir` | `archive/audio` | `importFirst()` 的默认输出参数；相对路径以 `dataDir` 为基准，调用前转为绝对路径 |
 | `cliTimeoutMs` | `190000` | Host 子进程运行时限，正整数毫秒；不改变适配器自身的 180 秒异步设备时限 |
 | `transcriptionProvider` | `dsh` | 使用 Host 的 speechToText；仅服务缺席回退 doubao，也可显式选 doubao |
@@ -69,9 +71,9 @@ M2a 后续固定了 CLI/规范参考 commit `de42d1fbf19fc92064ac4688f71f42730c8
 
 已实现默认 `dsh` 和显式 `doubao`；`openai`/独立 `local` 配置仍属后续规划。豆包经固定 CLI 写入独立暂存目录；管线核对产物指纹/provider/正文后统一归档，不凭进程日志判断成功。
 
-转写成功结果为 `{ status, provider, recognizer, path, audioPath, audioSha256, reused, fallbackReason? }`。缓存按音频指纹、provider、识别器 ID、语言及格式版本隔离，复用时核对正文哈希；同 ID 的模型替换需显式 `force`。并发同键串行，强制重转写不覆盖旧文件，使用暂存文件与原子硬链接发布。空正文、截断音频、识别期间输入变化均失败；取消或停用传播至识别器。导入先结束 BLE 清理，再调用此管线，转写失败不丢失独立 cleanup 警告。
+转写成功结果为 `{ status, provider, recognizer, path, audioPath, audioSha256, reused, fallbackReason? }`。缓存按音频指纹、provider、识别器 ID、语言及格式版本隔离，复用时核对正文哈希；同 ID 的模型替换需显式 `force`。并发同键串行，强制重转写不覆盖旧文件，使用暂存文件与原子硬链接发布。空正文、截断音频、识别期间输入变化均失败；取消或停用传播至识别器。导入先完成音频发布，再调用此管线；持续会话仍由 Host 持有，转写失败不丢失独立 cleanup 警告。
 
-缓存关联修复（未发布）：返回同路径缓存前重新读取当前音频并核对指纹；所有新归档（包括跨路径复用）在暂存完成后、发布前也做同样核对。优先命中当前绝对路径的归档；只有其他路径的有效缓存时，另存一份 `audio` 与标题指向当前文件的归档，并重新计算正文哈希，`reused: true` 表示正文没有再次识别。原归档不覆盖。`transcription_source_audio` 保留最初识别来源，`recorded_at_source_audio` 解释沿用的文件名时间；改名不会平移既有时间线。这些历史来源可以已不存在，当前有效音频引用是 `audio`。这是返回/发布时的校验，不保证外部进程之后不能修改音频。
+0.3.1 缓存关联修复：返回同路径缓存前重新读取当前音频并核对指纹；所有新归档（包括跨路径复用）在暂存完成后、发布前也做同样核对。优先命中当前绝对路径的归档；只有其他路径的有效缓存时，另存一份 `audio` 与标题指向当前文件的归档，并重新计算正文哈希，`reused: true` 表示正文没有再次识别。原归档不覆盖。`transcription_source_audio` 保留最初识别来源，`recorded_at_source_audio` 解释沿用的文件名时间；改名不会平移既有时间线。这些历史来源可以已不存在，当前有效音频引用是 `audio`。这是返回/发布时的校验，不保证外部进程之后不能修改音频。
 
 DSH 返回纯文本及音频/推理时长，无分段或说话人。归档声明 `timeline: none`、`speaker_source: fallback`，起始时间仅由文件名推算且时区未知。实际 Host/SenseVoice 验证见 [M4 记录](transcription-validation.md)。
 

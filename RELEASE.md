@@ -1,8 +1,24 @@
 # Release checklist
 
-**发布后修复待复核：** QA 发现 0.3.0 的缓存复用存在音频变化校验遗漏及换路径后归档关联陈旧的问题。工作区已修复并通过 93 项 Node 回归，尚未发布；0.3.0 不包含这些修复。详见 [缓存验证记录](docs/transcription-validation.md)。后续发布需使用新版本号。
+## 0.4.0 单图标与持续连接发布
 
-当前已发布 **[dsh-recorder-card@0.3.0](https://www.npmjs.com/package/dsh-recorder-card/v/0.3.0)**。注册表发布时间为 `2026-11-01T10:02:58.385Z`（北京时间 18:02:58），latest 已指向 0.3.0，description 与当前 package.json 一致。npm 接受请求后曾短暂返回 E404，随后可见性与下载均已核实。
+用户已确认 QA 通过并授权发布。版本范围包括单图标连接、对话引导、持久 BLE worker、连接/断开工具，以及队列取消和清理警告修复；仍为开发预览版。发布状态：准备中，尚未向 npm 提交。
+
+最近一次自检为 113 项 Node、54 项 Python 测试通过。真实桌面图标/主题、连接和引导提交证据，以及尚未完成的物理掉线、持续会话导入恢复和有凭据的 Agent 回复验证，见 [Remote 记录](docs/client-host-remote.md)。本次发布准备不扩大这些实机结论。Git 提交、推送及标签不在本次发布操作中。
+
+## 0.3.1 缓存修复发布
+
+用户已确认 QA 通过并授权发布。0.3.1 修复缓存返回前音频指纹复核及换路径后的归档关联。发布前 93 项 Node 测试、28 文件包预检、语法/文档链接检查通过；从实际 tarball 提取的转写模块也通过 13 项回归。与 0.3.0 的包差异仅为转写模块、package.json 和相关 README/Skill 说明。详见 [缓存验证记录](docs/transcription-validation.md)。
+
+**[dsh-recorder-card@0.3.1](https://www.npmjs.com/package/dsh-recorder-card/v/0.3.1) 已发布并核验。** 注册表时间为 `2026-11-01T10:18:51.481Z`（北京时间 18:18:51），latest 指向 0.3.1，description 与 package.json 一致。npm 接受后曾短暂 E404，随后元数据及下载均通过核对。
+
+下载包与本地测试包的 SHA-256 一致：`e5a2f8135708fcd1279d3630e8f4a2ab1654c1509f10ebabd23e9b798b34bc50`；注册表 shasum `31a51bdf28cf6be9dc9872a3859c924c8aa65cec` 及 integrity 也一致。严格 `minimumReleaseAge: 1440` 的环境应等到北京时间 **2026-11-02 18:19 之后**再安装 0.3.1；本轮未执行 DSH 安装或添加豁免。
+
+未提交、推送或创建 Git 标签。本轮没有新增 DSH/硬件/云 ASR 操作；0.3.0 的实机证据不扩大为 0.3.1 的新增实机验收。
+
+## 0.3.0 历史发布记录
+
+此前已发布 **[dsh-recorder-card@0.3.0](https://www.npmjs.com/package/dsh-recorder-card/v/0.3.0)**。注册表发布时间为 `2026-11-01T10:02:58.385Z`（北京时间 18:02:58），当时 latest 指向 0.3.0，description 与当前 package.json 一致。npm 接受请求后曾短暂返回 E404，随后可见性与下载均已核实。
 
 本轮自检：89 项 Node、46 项 Python 测试通过；28 文件包预检、25 个 JS 文件语法和 17 份 Markdown 的本地链接目标检查通过。真实 Host SenseVoice 转写/工具复用及隔离原生桌面配置/认证/主题模拟证据见 [M4](docs/transcription-validation.md) 与 [Remote](docs/client-host-remote.md)。这是开发者自检，不是独立 QA。
 
@@ -12,7 +28,7 @@
 
 发布前对照本清单。DSH 插件**无应用商店审核**：用户输入一个 spec 即直接安装。装插件 = 在用户 DSH 的 Node 进程 / 浏览器中运行你的代码，信任来自开源与可读源码，而非平台背书。
 
-## 当前发布状态
+## 历史版本核对待办
 
 项目已记录 npm 开发预览版 `dsh-recorder-card@0.1.0` 发布。该状态不代表 DSH 安装、启用、硬件或完整流程验收通过；M1–M5 仍按[路线图](ROADMAP.md)验收。
 

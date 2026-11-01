@@ -1,7 +1,7 @@
 {
   "name": "dsh-recorder-card",
-  "version": "0.3.0",
-  "description": "Development-preview DSH plugin for AI recorder cards: bundled Python BLE CLI, safe audio import, DSH speech-to-text and fingerprint-linked Markdown archives. Requires Host Bluetooth and Python dependencies.",
+  "version": "0.4.0",
+  "description": "Development-preview DSH plugin for AI recorder cards: persistent Host BLE connection, conversation controls, safe audio import and DSH speech-to-text. Includes pinned Python CLI sources; requires Python dependencies and Host Bluetooth.",
   "keywords": [
     "deepseek",
     "deepseek-harness",
@@ -20,7 +20,7 @@
     "test": "node scripts/sync-client-contract.mjs --check && node --test tests/*.test.js",
     "sync:client": "node scripts/sync-client-contract.mjs",
     "check:package": "node scripts/check-package.mjs",
-    "test:cli": "python -m unittest discover -s tests -p \"test_cli_adapter.py\""
+    "test:cli": "python -m unittest discover -s tests -p \"test_*.py\""
   },
   "exports": {
     ".": "./index.js",
@@ -41,6 +41,8 @@
     "skill/",
     "runtime/recorder_cli.py",
     "runtime/host-cli.js",
+    "runtime/connection.js",
+    "runtime/recorder_worker.py",
     "runtime/tools.js",
     "runtime/service.js",
     "runtime/device-settings.js",

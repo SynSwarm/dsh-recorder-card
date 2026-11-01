@@ -18,7 +18,7 @@ function hooks() {
     useRef(initial) { return values[cursor++] ??= { current: initial }; },
     useEffect(fn) { const slot = cursor++; if (!(slot in values)) effects.push(() => { values[slot] = { cleanup: fn() }; }); },
   };
-  const render = () => { cursor = 0; tree = Card(); while (effects.length) effects.shift()(); return tree; };
+  const render = () => { cursor = 0; tree = Card({ sessionId: "session-test" }); while (effects.length) effects.shift()(); return tree; };
   const text = (...args) => { const node = args.length ? args[0] : render(); return !node || typeof node !== "object" ? String(node ?? "") : node.children.map(child => text(child)).join(" "); };
   const nodes = (...args) => { const node = args.length ? args[0] : render(); return !node || typeof node !== "object" ? [] : [node, ...node.children.flatMap(child => nodes(child))]; };
   return { React, text,
@@ -32,94 +32,90 @@ function hooks() {
 }
 const success = { code: 0, out: "test device", err: "" };
 async function card(t, service) {
-  const runtime = await remoteRuntime(t, service, false);
+  const runtime = await remoteRuntime(t, { connectionState: async () => ({ status: "disconnected", name: "" }), ...service }, false);
   const ui = hooks();
-  await runtime.mount(runtime.client, { apply(ctx) { ctx.provide("slots", {
+  const messages = [];
+  await runtime.mount(runtime.client, { apply(ctx) {
+    ctx.provide("conversation", {});
+    ctx.provide("sessions", { scope(id) { assert.equal(id, "session-test"); return {
+      get conversation() { throw new Error("Scoped property requires inject; use get()"); },
+      get(name) { assert.equal(name, "conversation"); return { async send(text) { messages.push(text); } }; },
+    }; } });
+    ctx.provide("slots", {
     inject(_slot, register) { register(); }, register(_options, component) { ui.register(component); },
   }); } });
   const fiber = await runtime.mount(runtime.client, clientModule(new URL("../client.js", import.meta.url), { react: ui.React }));
   t.after(() => ui.unmount());
-  return { ...runtime, ui, fiber };
+  return { ...runtime, ui, fiber, messages };
 }
 
-test("icon uses Host Remote without browser BLE; operation errors remain visible", async t => {
-  const { ui, calls } = await card(t, { scan: async () => success, status: async () => { throw new TypeError("deviceAddress required"); } });
-  assert.deepEqual(calls, []);
-  await ui.click("扫描录音卡");
-  assert.deepEqual(calls, ["recorder/scan"]);
-  assert.match(ui.text(), /test device/);
-  assert.match(ui.text(), /设备地址/);
-  await ui.click("读取状态");
-  assert.match(ui.text(), /recorder\/config-or-argument.*deviceAddress required/);
+test("single icon connects through Host and sends guidance to its scoped conversation", async t => {
+  const { ui, calls, messages } = await card(t, { connect: async () => ({ status: "connected", name: "test" }) });
+  await ui.click("连接录音卡");
+  assert.ok(ui.button("录音卡已连接，查看对话引导"));
+  assert.equal(ui.input("设备地址"), undefined);
+  assert.deepEqual(calls.filter(c => !c.endsWith("connectionState")), ["recorder/connect"]);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /Host 已确认蓝牙连接成功/);
+  await ui.click("录音卡已连接，查看对话引导");
+  assert.equal(messages.length, 2);
 });
 
-test("device settings UI loads, saves and displays failure without claiming success", async t => {
-  let saved = "test-initial";
-  const { ui, calls } = await card(t, {
-    getDevice: async () => ({ deviceAddress: saved, source: "saved" }),
-    saveDevice: async address => {
-      if (address === "test-fail") throw Object.assign(new Error("Cannot save settings"), { name: "SettingsError" });
-      saved = address; return { deviceAddress: saved, source: "saved" };
-    },
-  });
-  await ui.click("设置设备");
-  assert.equal(ui.input("设备地址").props.value, "test-initial");
-  ui.input("设备地址").props.onChange({ target: { value: "test-new" } });
-  await ui.click("保存设备地址");
-  assert.equal(saved, "test-new");
-  assert.match(ui.text(), /已保存并生效/);
-  ui.input("设备地址").props.onChange({ target: { value: "test-fail" } });
-  await ui.click("保存设备地址");
-  assert.match(ui.text(), /recorder\/settings-failed/);
-  assert.doesNotMatch(ui.text(), /已保存并生效/);
-  assert.equal(saved, "test-new");
-  assert.deepEqual(calls, ["recorder/getDevice", "recorder/saveDevice", "recorder/saveDevice"]);
+test("multiple devices are offered in conversation without claiming connection", async t => {
+  const { ui, messages } = await card(t, { connect: async () => ({ status: "selection-required", name: "",
+    devices: [{ address: "test-a", name: "A" }, { address: "test-b", name: "B" }] }) });
+  await ui.click("连接录音卡");
+  assert.equal(ui.button("录音卡已连接，查看对话引导"), undefined);
+  assert.match(messages[0], /等我明确选择后/);
+  assert.match(messages[0], /test-b/);
 });
 
-for (const exit of ["cancel", "component", "plugin"]) test(`busy UI rejects rapid clicks and ${exit} aborts the Host call`, async t => {
+test("connect error stays visible and never produces success guidance", async t => {
+  const { ui, messages } = await card(t, { connect: async () => { throw new TypeError("dependency missing"); } });
+  await ui.click("连接录音卡");
+  assert.match(ui.text(), /连接失败.*dependency missing/);
+  assert.equal(messages.length, 0);
+});
+
+for (const exit of ["cancel", "component", "plugin"]) test(`connecting ${exit} aborts Host call without late UI updates`, async t => {
   let ready;
   const started = new Promise(resolve => { ready = resolve; });
   let aborted = false;
-  const { ui, calls, fiber } = await card(t, { async scan({ signal }) {
+  const { ui, calls, fiber, messages } = await card(t, { async connect(_address, { signal }) {
     ready();
     await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
     aborted = true; signal.throwIfAborted();
   } });
-  const click = ui.button("扫描录音卡").props.onClick;
-  const first = click();
-  await click();
+  const first = ui.button("连接录音卡").props.onClick();
   await started;
-  assert.deepEqual(calls, ["recorder/scan"]);
-  assert.equal(ui.button("读取状态").props.disabled, true);
-  if (exit === "cancel") await ui.click("取消");
+  assert.deepEqual(calls.filter(c => !c.endsWith("connectionState")), ["recorder/connect"]);
+  if (exit === "cancel") await ui.click("取消连接录音卡");
   else if (exit === "component") ui.unmount();
   else await fiber.dispose();
   await first; await flush();
   assert.equal(aborted, true);
   assert.equal(ui.lateUpdates, 0);
-  if (exit === "cancel") assert.match(ui.text(), /已取消.*连接释放未确认/);
+  assert.equal(messages.length, 0);
 });
 
-test("partial import displays both failures and retries only transcription of the saved audio", async t => {
-  let imports = 0;
-  const { ui, calls } = await card(t, {
-    scan: async () => success,
-    async importFirst(_dir, transcribe) {
-      imports++; assert.equal(transcribe, true);
-      return { status: "partial", import: { status: "succeeded", path: "saved-test.wav", bytes: 48, sha256: "a".repeat(64),
-        integrity: { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 } },
-        transcription: { status: "failed", error: { code: "asr", message: "ASR offline" } },
-        cleanup: { status: "unconfirmed", errors: [{ code: "disconnect", message: "release unconfirmed" }] } };
-    },
-    async transcribe(file, options) { assert.equal(file, "saved-test.wav"); assert.equal(options.force, false); return transcriptResult; },
+test("actual Host drop clears green state and sends a single conversation notice", async t => {
+  let state = { status: "disconnected", name: "" };
+  const { ui, messages } = await card(t, {
+    connect: async () => (state = { status: "connected", name: "test" }),
+    connectionState: async () => state,
   });
-  await ui.click("扫描录音卡");
-  await ui.click("导入首条并转写");
-  assert.match(ui.text(), /ASR offline/);
-  assert.match(ui.text(), /release unconfirmed/);
-  await ui.click("重试已保存音频的转写");
-  assert.equal(imports, 1);
-  assert.equal(calls.at(-1), "recorder/transcribe");
-  assert.equal(ui.button("重试已保存音频的转写"), undefined);
-  assert.match(ui.text(), /导入时连接释放未确认.*release unconfirmed/);
+  await ui.click("连接录音卡");
+  state = { status: "disconnected", name: "" };
+  await new Promise(resolve => setTimeout(resolve, 1700));
+  assert.ok(ui.button("连接录音卡"));
+  assert.equal(messages.length, 2);
+  assert.match(messages[1], /连接已断开/);
+});
+
+test("idle cleanup warning is visible even when the card mounts after worker exit", async t => {
+  const { ui } = await card(t, { connectionState: async () => ({ status: "cleanup-unconfirmed", name: "", message: "idle cleanup failed" }) });
+  await flush(); await flush();
+  assert.ok(ui.button("连接释放未确认，请检查设备"));
+  assert.match(ui.text(), /设备连接释放未确认.*idle cleanup failed/);
+  assert.equal(ui.button("录音卡已连接，查看对话引导"), undefined);
 });

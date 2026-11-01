@@ -24,6 +24,9 @@ export function createRecorderContract() {
   const error = object({ code: nonempty, message: string });
   const process = object({ code: integer, out: string, err: string });
   const device = object({ deviceAddress: string, source: oneOf("saved", "config", "none") });
+  const connection = object({ status: oneOf("disconnected", "cleanup-unconfirmed", "connecting", "connected", "selection-required", "not-found"),
+    name: string, address: optional(nonempty), message: optional(string),
+    devices: optional(array(object({ name: string, address: nonempty }))) });
   const transcriptFields = { provider: oneOf("dsh", "doubao"), recognizer: nonempty, path: nonempty,
     audioPath: nonempty, audioSha256: value => /^[a-f0-9]{64}$/.test(string(value)) ? value : fail(),
     reused: boolean, fallbackReason: optional(nonempty) };
@@ -40,7 +43,7 @@ export function createRecorderContract() {
       exitCode: optional(value => value === null ? null : integer(value)), error: optional(error),
       retry: optional(object({ tool: oneOf("recorder_transcribe"), arguments: object({ file: nonempty }) })),
     }),
-    cleanup: object({ status: oneOf("succeeded", "not-needed", "unconfirmed"), errors: array(error) }),
+    cleanup: object({ status: oneOf("succeeded", "not-needed", "retained", "unconfirmed"), errors: array(error) }),
   });
   const codec = (name, parse) => ({ mode: "strict", typeSymbol: `dsh-recorder-card#${name}`,
     create: () => ({ parse }), encode: value => parse(value), decode: value => parse(value) });
@@ -48,6 +51,7 @@ export function createRecorderContract() {
     codec: codec(name, parse), ...(acceptsUndefined ? { acceptsUndefined: true } : {}) });
   const definitions = {
     scan: [], status: [], list: [],
+    connect: [parameter("address", optional(string), true)], disconnect: [], connectionState: [],
     record: [parameter("action", oneOf("state", "start", "pause", "resume", "save"))],
     importFirst: [parameter("options", optional(object({ outDir: optional(nonempty), transcribe: optional(boolean) })), true)],
     transcribe: [parameter("file", nonempty), parameter("force", optional(boolean), true)],
@@ -58,6 +62,7 @@ export function createRecorderContract() {
     id: `dsh-recorder-card#recorder/${method}`, service: "recorderController", namespace: "recorder", method,
     invocation: { kind: "direct" }, parameters, cancellation: { parameter: "signal" },
     result: method === "transcribe" ? codec("TranscriptResult", transcript)
+      : ["connect", "disconnect", "connectionState"].includes(method) ? codec("ConnectionState", connection)
       : method === "getDevice" || method === "saveDevice" ? codec("DeviceSettings", device)
       : codec(method === "importFirst" ? "ImportResult" : "ProcessResult", method === "importFirst" ? imported : process),
   }));

@@ -15,7 +15,7 @@ assert.equal(result.status, 0, result.stderr || result.stdout);
 const [pack] = JSON.parse(result.stdout);
 const included = new Set(pack.files.map((file) => file.path));
 const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-for (const path of [...Object.values(manifest.exports), manifest.dsh.bundle.patch, "runtime/remote-contract.js", "runtime/device-settings.js", "runtime/transcription.js",
+for (const path of [...Object.values(manifest.exports), manifest.dsh.bundle.patch, "runtime/connection.js", "runtime/recorder_worker.py", "runtime/remote-contract.js", "runtime/device-settings.js", "runtime/transcription.js",
   "skill/SKILL.md", "runtime/recorder_cli.py", "runtime/host-cli.js", "runtime/tools.js", "LICENSE", "vendor/recorder-protocol.js", "vendor/LICENSE"]) {
   assert.ok(included.has(path.replace(/^\.\//, "")), `Missing package entry: ${path}`);
 }

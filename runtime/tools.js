@@ -7,7 +7,7 @@ const processOutput = {
     type: "object", additionalProperties: false,
     properties: {
       operation: { type: "string", required: true },
-      completion: { type: "string", enum: ["process-exited"], required: true },
+      completion: { type: "string", enum: ["operation-completed"], required: true },
       exitCode: { type: "integer", required: true },
       stdout: { type: "string", required: true },
       stderr: { type: "string", required: true },
@@ -31,7 +31,7 @@ const importOutput = {
       } },
     } },
     cleanup: { type: "object", required: true, additionalProperties: false, properties: {
-      status: { type: "string", enum: ["succeeded", "not-needed", "unconfirmed"], required: true },
+      status: { type: "string", enum: ["succeeded", "not-needed", "retained", "unconfirmed"], required: true },
       errors: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: {
         code: { type: "string", required: true }, message: { type: "string", required: true },
       } } },
@@ -65,7 +65,7 @@ const errorCodes = {
 async function executeProcess(operation, run) {
   return executeOperation(operation, async () => {
     const result = await run();
-    return { operation, completion: "process-exited", exitCode: result.code,
+    return { operation, completion: "operation-completed", exitCode: result.code,
       stdout: result.out, stderr: result.err };
   });
 }
@@ -85,10 +85,31 @@ async function executeOperation(operation, run) {
 // the actual cordis session's effective catalog and presentation still need validation.
 export function registerRecorderTools(ctx, service) {
   const output = processOutput;
+  const connectionOutput = { schema: { type: "object", additionalProperties: false, properties: {
+    status: { type: "string", required: true, enum: ["disconnected", "cleanup-unconfirmed", "connecting", "connected", "selection-required", "not-found"] },
+    name: { type: "string", required: true }, address: { type: "string" }, message: { type: "string" },
+    devices: { type: "array", items: { type: "object", additionalProperties: false, properties: {
+      name: { type: "string", required: true }, address: { type: "string", required: true },
+    } } },
+  } }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] };
+  ctx.tools.register(defineTool({
+    name: "recorder_connect",
+    description: "Connect and hold the recorder BLE session. With no address, reconnect the saved card or scan and connect the only card. If selection-required, ask the user which returned device to use before calling with its address. An empty address clears the saved selection and scans again. Never guess an address or silently select among multiple cards.",
+    parameters: { address: { type: "string", description: "Optional device identifier from scan results, selected by the user; empty string rescans." } },
+    output: connectionOutput,
+    execute: (args, exec) => executeOperation("connect", () => service.connect(args.address, { signal: exec.signal })),
+    presentCall: args => ({ card: "generic", title: "Connect recorder card", kind: "other", rawInput: args }),
+  }));
+  ctx.tools.register(defineTool({
+    name: "recorder_disconnect", description: "Release the persistent recorder BLE connection. Does not stop or save a recording.",
+    parameters: {}, output: connectionOutput,
+    execute: (_args, exec) => executeOperation("disconnect", () => service.disconnect({ signal: exec.signal })),
+    presentCall: () => ({ card: "generic", title: "Disconnect recorder card", kind: "other", rawInput: {} }),
+  }));
 
   ctx.tools.register(defineTool({
     name: "recorder_scan",
-    description: "Scan for AI recorder cards over BLE without device configuration. Use the card's Device settings input to save the selected identifier before status/list/record/import; the saved selection takes effect immediately.",
+    description: "Scan for AI recorder cards over BLE without device configuration. Releases an existing persistent connection first. Use recorder_connect with the user-selected identifier to connect and save it.",
     parameters: {},
     output,
     async execute(_args, exec) {
@@ -99,7 +120,7 @@ export function registerRecorderTools(ctx, service) {
 
   ctx.tools.register(defineTool({
     name: "recorder_status",
-    description: "Read battery, capacity, and firmware status from the configured recorder card using a new CLI connection.",
+    description: "Read battery, capacity, and firmware status from the recorder card, reusing the Host connection when present.",
     parameters: {},
     output,
     async execute(_args, exec) {

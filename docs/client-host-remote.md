@@ -1,12 +1,12 @@
 # Client→Host Remote：实现与验证
 
-状态：0.3.0 已接线，并提供设备地址持久化入口及默认 DSH 转写。官方 Gateway 测试、真实 Web 实机导入与后续原生桌面检查通过本记录范围的自检；仍不代表 M2b/M3/M5 整体已验收。发布状态见 [RELEASE](../RELEASE.md)。
+状态：0.4.0 实现单图标、持续连接和对话引导，0.3.1 使用旧配置卡片。下文按日期保留各次候选构建的验收证据和当时的未发布状态，不将旧证据扩大为后续修复已实机验收。最新发布状态见 [RELEASE](../RELEASE.md)。
 
 ## 调用路径与配置
 
 `client.js` → `ctx.remote.recorder` → `recorderController` → `recorder` Service → 随包 Python CLI → Host 蓝牙。
 
-[index.js](../index.js) 在同一插件生命周期内创建一个 [RecorderService](../runtime/service.js)，工具直接使用该实例，Remote 通过 Cordis 注入同一服务。主 Loader 条目仍只有 `recorder-card`：无需重复 Service 配置，也不新增三个各自持有配置的条目。子控制器等待 `recorder` 和 `typert`；缺少 Gateway 的 headless 场景不会阻塞六个 Agent 工具。
+[index.js](../index.js) 在同一插件生命周期内创建一个 [RecorderService](../runtime/service.js)，工具直接使用该实例，Remote 通过 Cordis 注入同一服务。主 Loader 条目仍只有 `recorder-card`：无需重复 Service 配置，也不新增三个各自持有配置的条目。子控制器等待 `recorder` 和 `typert`；缺少 Gateway 的 headless 场景不会阻塞八个 Agent 工具。
 
 Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实例还统一了配置、取消与停用生命周期；没有新增跨进程锁。手机、外部 CLI 或其他 Host 仍需显式释放设备。
 
@@ -22,10 +22,13 @@ Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实
 - 所有方法声明最终 `signal` 取消参数；它不进入 JSON `args`。可选业务参数仍占调用位置，例如 `transcribe(file, undefined, signal)`、`importFirst(undefined, signal)`。
 - `status()` 是独立 CLI/BLE 操作，不作为扫描进度轮询。当前仅显示忙碌状态和最终文本，没有进度流。
 
-## 八个方法（六个设备/转写，两个配置）
+## 十一个方法（六个设备/转写、两个配置、三个连接）
 
 | 方法 | 业务参数 | 返回值 |
 |---|---|---|
+| `connect(address?, signal?)` | 缺省重连已保存设备；空字符串清除选择后扫描 | `{ status, name, address?, devices?, message? }`，多设备返回 `selection-required` |
+| `disconnect(signal?)` | 无 | 同上，成功状态 `disconnected`；释放失败走错误通道 |
+| `connectionState(signal?)` | 无；只读 Host 内存，不访问 BLE | 同上；由 Bleak 断线回调更新 |
 | `getDevice(signal?)` | 无 | `{ deviceAddress, source }`，source 为 `saved / config / none` |
 | `saveDevice(address, signal?)` | 设备标识字符串；空字符串清除选择 | 同上，持久化成功后返回 |
 | `scan(signal?)` | 无，不需要设备地址 | `{ code, out, err }` |
@@ -39,15 +42,44 @@ Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实
 
 ## Client 生命周期与界面边界
 
-客户端 manifest 声明 Gateway 依赖，`apply()` 先 `$mount` 贡献，再等待 `remote.recorder` 和 `slots`，注册 `conversation.input.activity`。组件卸载取消自己的调用；插件卸载取消全部卡片调用、撤销 UI 与 Remote 贡献。Hook 内用同步引用阻止重新渲染前的连点；跨卡片与 Agent 的操作仍由 Host 队列串行化。
+客户端 manifest 声明 Gateway 依赖，`apply()` 先 `$mount`，等待 `remote.recorder`、`slots`、`sessions` 和 `conversation`，注册列表 Slot `conversation.input.left`，避免覆盖语音输入占用的单项 activity Slot。组件卸载取消自己的连接请求和状态轮询；已建立的 Host 会话属于共享 Service，切换对话不主动断开。Host 插件卸载释放连接和子进程。跨 Agent 与图标操作在同一连接上串行化；整个持续会话占据模块级 BLE 队列，其他实例不能启动竞争进程。
 
-麦克风图标通过 Host 扫描，扫描不保持连接。用户点击“设置设备”，将扫描标识填入“设备地址”并保存后，立即使用状态/列表/首条导入按钮，无需手改 YAML 或重新加载。保存成功与扫描结果分别显示。录音控制明确提示固件支持未确认，不自动重试。转写是独立选择，会使用 Host 配置的 ASR 后端。
+录音卡图标点击后连接上次设备；首次扫描仅一个结果时自动连接并保存，多设备时通过对话选择。灰色/闪动/绿色分别表示未连接/连接中/Host 确认连接；每 1.5 秒读取 `connectionState()`，不会轮询 BLE `status()`。连接中再次点击取消。右键或 Shift+F10 提供断开、切换设备。错误提示是固定浮层，不挤占工具栏。
 
-生产 Client 不再依赖 `navigator.bluetooth`。退役实现迁入 `tests/fixtures/legacy-web-bluetooth.js`，仅用于历史回归，不随包分发。图标沿用麦克风外观；样式使用宿主别名 token，不导入私有 UI 包。
+对话接口核对自安装版 DSH 0.2.0-rc.2 的 `dsh-client-ui-conversation/lib/client.js`：使用 `ctx.sessions.scope(sessionId).get("conversation").send(text)`，发送到点击时的会话，保留草稿；不伪造 Assistant 消息。成功提示只请求引导，禁止自动导入、录音和上传。多设备名以 JSON 数据传入，要求 Agent 等待用户选择，再调用 `recorder_connect`。没有会话/模型不可用时保留明确失败提示，不宣称已得到 Agent 回应。
+
+`recorder_worker.py` 使用固定上游 Session，保持连接并串行执行原有完整列表、录音确认与安全导入逻辑。失败操作关闭会话以隔离迟到帧；已发送操作的取消/超时终止整个进程树。导入成功时 `cleanup.status: retained` 表示 Host 有意持有连接，可继续对话操作，不等于连接已释放。一次性 CLI 路径仍返回 succeeded/not-needed/unconfirmed。首次断开失败不因上游清空 client 或再次 disconnect 返回而消失。
+
+意外断线同时唤醒 worker 的等待逻辑并取消正在执行的设备操作；Host 收到断线事件后停止接受新请求、关闭 stdin，使 Python 读取线程也能退出。共享队列仍等到进程/管道关闭才释放，不能仅凭 disconnected 状态启动竞争操作。10 秒内未退出时升级为进程树终止并提示释放未确认。持久会话内尚未发送的排队请求取消后立即返回 AbortError，不写入设备、不终止前一请求；只有已发送请求的取消才终止会话。
+
+生产 Client 不依赖 `navigator.bluetooth`。退役实现迁入 `tests/fixtures/legacy-web-bluetooth.js`，仅用于历史回归，不随包分发。图标为录音卡轮廓；样式使用宿主别名 token，绿色使用安装版实际提供的 `--dsw-alias-state-success-primary`，不导入私有 UI 包。
+
+清理失败单独保留为连接终态 `cleanup-unconfirmed`，并附带 `message`，不同于导入结果中的 `cleanup.status: unconfirmed`。Python 的空闲退出 finally 也通过事件发送首次断开失败；Host 收到后不会被随后的普通断线事件、进程关闭或重复 disconnect 覆盖。没有事件的非零/异常退出也保守报告释放未确认。Remote 契约、Agent 连接结果及图标均支持此状态，UI 显示检查设备提示。
+
+进程退出后全局队列可以结束旧占用，但旧请求不能静默继续：警告发生前已排队的每个请求均以 `CleanupError` 返回，不启动设备操作；尚未收到该警告的其他 Service 实例，其首次设备请求也先返回错误。调用方收到后应提示用户检查设备，再明确重试，不能自动循环重试。此机制是错误通知，不是验证用户已实际检查设备。新的连接确认成功后清除共享通知，但其他已失败实例仍保留自己的清理终态；独立转写不受设备队列通知影响。
 
 ## 契约维护
 
 [runtime/remote-contract.js](../runtime/remote-contract.js) 是描述符与 wire 校验的唯一维护来源，Host 和 `typert.remote-client.js` 直接导入它。运行 `npm run sync:client` 将无依赖工厂复制到浏览器 ModuleLoader 入口；生成结果提交入库，用户无需构建。`npm test` 首先检查副本漂移。新增方法时同时更新控制器、契约、UI（如需）与验证。
+
+## 2026-11-01 单图标与持续连接自检（未发布）
+
+- 本轮为开发者自检。103 项 Node、51 项 Python 回归通过；包含官方 Gateway 的连接/选择/retained 导入契约、Agent 选卡/断开工具、连接取消、组件/插件卸载、掉线通知、跨实例 BLE 占用及上游真实 Session 首次断开失败。Python 使用模拟 Bleak，未访问无线设备。
+- 使用用户已确认就绪的测试卡，在隔离数据目录通过随包 worker 完成连接、读取状态、保持 5 秒、主动断开、再次连接与退出清理；未录音、导入、删除或上传音频。
+- 本地候选包安装到隔离 DSH Desktop 0.2.0-rc.2 profile，真实 `dsh-app:` 创造模式页面显示 30×30 单图标；连接后为绿色 `rgb(34, 197, 94)`，原工具栏不再展开配置表单。右键菜单主动断开通过。
+- 在输入框保留合成草稿后点击图标，连接引导确实进入同一会话，草稿内容未被覆盖。模型执行随后报 `MISSING_CREDENTIAL`，因为该隔离环境没有 API Key；不将“提交引导成功”写成“Agent 回复已验证”。过程中发现会话作用域属性访问必须改为 `get("conversation")`，已修复并加入回归。
+- 主题变量依据本机安装版 `dsh-client-ui-theme/lib/client.js` 核对；未使用旧界面中不存在的 content/background-primary 别名。最终样式使用 label、bg-layer、border-l2 和 state-success-primary 系列。
+- 最终主题检查使用真实 Electron 页面的系统主题媒体模拟：未连接图标由浅色模式 `rgb(97, 102, 107)` 切换为深色模式 `rgb(207, 211, 214)`；菜单背景分别为白色与 `rgb(44, 44, 46)`，宽高均保持 30×30。未验证操作系统主题持久化。候选 tarball SHA-256 为 `08a05a8de8d28142b05e13d701c7ed0d3ac3655765057146f29da1f6f550c48c`；此后仅调整 Host 缩进与文档，不据此声称 npm 发布。
+- 原始结果在忽略目录 `.cache/ui-live/`，设备配置、日志及截图不提交。测试包沿用工作区 0.3.1 元数据仅供本地安装，与 npm 已发布 0.3.1 内容不同；没有发布、提交或修改日常 DSH profile。
+- 仍未验证物理意外断电/距离掉线、多个实体设备选择、持续会话完整导入恢复及有凭据的 Agent 回复。上述异常已有模拟覆盖，不替代实机验收。
+
+## 2026-11-01 队列问题修复自检（未发布）
+
+此前单图标构建的提交前复核发现断线后队列未释放、排队取消延迟两个 P2，现已修复并完成开发者自检：109 项 Node、53 项 Python 测试、包预检及 diff 检查通过。新增测试先复现失败，再验证排队取消不影响活动请求、断线后等待进程关闭才释放全局队列、退出超时升级终止，以及实际 Python 子进程在空闲/执行中模拟断线后退出（使用固定上游 Session、模拟 Bleak）。忙碌断线和首次清理失败同时发生的错误保留也通过。原始输出位于 `.cache/ui-live/qa-queue-*.log`；本次没有真实 BLE、DSH 或物理断线复测，不替代下一轮独立 QA。
+
+## 2026-11-01 空闲清理失败上报自检（未发布）
+
+先用固定上游 Session、模拟断开失败复现 Python 空闲清理缺少通信事件，并复现 Host 在非零退出后覆盖终态。修复后，真实 Python 子进程模拟空闲清理失败，确认 `cleanup-unconfirmed` 和首个错误信息保留到进程退出后；两项已排队扫描及新实例的首次扫描均返回 `CleanupError`，没有启动 BLE 操作。调用方收到错误后可明确重试，新连接成功能清除共享通知，但不会覆盖旧实例的终态。另覆盖没有清理事件的异常退出、官方 Remote 的状态/错误传输，以及组件在 worker 退出后才挂载时的警告显示。去掉一项重复的退出超时测试后，113 项 Node、54 项 Python 测试通过；包预检、契约同步及 diff 检查通过。原始记录位于 `.cache/ui-live/qa-idle-*.log`。本轮为开发者自检，没有真实设备或 DSH 桌面复测，尚待独立 QA。
 
 ## 2026-11-01 首轮接口自检（历史六方法构建）
 

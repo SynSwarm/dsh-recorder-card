@@ -55,11 +55,27 @@ function stub() {
   return { calls, service };
 }
 
-test("real Cordis/DSH registry loads and disposes the six tools and Skill without duplicates", async (t) => {
+test("Agent can choose a discovered card and disconnect through validated tool results", async t => {
+  const calls = [];
+  const { execute } = await runtime(t, {
+    connect: async (address, options) => {
+      calls.push(address); assert.ok(options.signal instanceof AbortSignal);
+      return address ? { status: "connected", name: "test", address } :
+        { status: "selection-required", name: "", devices: [{ name: "test", address: "test-id" }] };
+    },
+    disconnect: async () => ({ status: "disconnected", name: "" }),
+  });
+  assert.equal((await execute("recorder_connect")).value.status, "selection-required");
+  assert.equal((await execute("recorder_connect", { address: "test-id" })).value.status, "connected");
+  assert.equal((await execute("recorder_disconnect")).value.status, "disconnected");
+  assert.deepEqual(calls, [undefined, "test-id"]);
+});
+
+test("real Cordis/DSH registry loads and disposes the eight tools and Skill without duplicates", async (t) => {
   const { ctx, mount } = await runtime(t);
   const first = await mount(plugin);
   assert.deepEqual(ctx.tools.schemas().map(tool => tool.name), [
-    "recorder_scan", "recorder_status", "recorder_list", "recorder_record", "recorder_import", "recorder_transcribe",
+    "recorder_connect", "recorder_disconnect", "recorder_scan", "recorder_status", "recorder_list", "recorder_record", "recorder_import", "recorder_transcribe",
   ]);
   assert.equal((await ctx.skills.list()).length, 1);
   assert.match((await ctx.skills.get("recorder-card-bringup")).content, /^# AI recorder card/);
@@ -67,7 +83,7 @@ test("real Cordis/DSH registry loads and disposes the six tools and Skill withou
   assert.equal(ctx.tools.schemas().length, 0);
   assert.equal((await ctx.skills.list()).length, 0);
   await mount(plugin);
-  assert.equal(ctx.tools.schemas().length, 6);
+  assert.equal(ctx.tools.schemas().length, 8);
   assert.equal((await ctx.skills.list()).length, 1);
 });
 
@@ -101,7 +117,7 @@ test("Host tools are inherited and callable in an agent scope without device acc
   const scope = createScope(ctx, agent);
   t.after(() => scope.dispose());
   assert.deepEqual(ctx.tools.schemas(agent).map(tool => tool.name), ctx.tools.schemas().map(tool => tool.name));
-  assert.equal(ctx.tools.schemas(agent).length, 6);
+  assert.equal(ctx.tools.schemas(agent).length, 8);
   const result = await ctx.tools.execute({ callId: "scoped-config-check", agent,
     name: "recorder_status", arguments: {}, signal: new AbortController().signal });
   assert.equal(result.isError, true);
@@ -123,15 +139,15 @@ test("preset scope restrictions filter inherited Host tools without hiding them 
   } });
   t.after(async () => { await agentScope.dispose(); await presetScope.dispose(); });
   const release = presetScope.ctx.tools.restrict({ deny: ["recorder_status"] });
-  assert.equal(ctx.tools.schemas().length, 6);
-  assert.equal(ctx.tools.schemas(agent).length, 5);
+  assert.equal(ctx.tools.schemas().length, 8);
+  assert.equal(ctx.tools.schemas(agent).length, 7);
   assert.equal(ctx.tools.get("recorder_status", agent), undefined);
   const denied = await ctx.tools.execute({ callId: "scoped-denial-check", agent,
     name: "recorder_status", arguments: {}, signal: new AbortController().signal });
   assert.equal(denied.isError, true);
   assert.equal(denied.error.info.code, "UNKNOWN_TOOL");
   release();
-  assert.equal(ctx.tools.schemas(agent).length, 6);
+  assert.equal(ctx.tools.schemas(agent).length, 8);
 });
 
 test("tool schema validation rejects malformed calls before device access", async (t) => {
@@ -169,7 +185,7 @@ test("every tool maps arguments and signal correctly and returns a validated pro
     } else if (method === "transcribe") {
       assert.deepEqual(result.value, transcriptResult);
     } else {
-      assert.equal(result.value.completion, "process-exited");
+      assert.equal(result.value.completion, "operation-completed");
       assert.equal(result.value.exitCode, 0);
       assert.equal(result.value.stdout, `output:${method}`);
     }

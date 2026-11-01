@@ -14,12 +14,40 @@ const partial = {
   cleanup: { status: "unconfirmed", errors: [{ code: "disconnect-failed", message: "release unconfirmed" }] },
 };
 
+test("connection Remote preserves selection and retained import results through real codecs", async t => {
+  const selection = { status: "selection-required", name: "", devices: [{ address: "test", name: "test" }] };
+  const { client } = await remoteRuntime(t, {
+    connect: async () => selection,
+    connectionState: async () => ({ status: "connected", name: "test" }),
+    disconnect: async () => ({ status: "disconnected", name: "" }),
+    importFirst: async () => ({ ...partial, status: "succeeded", transcription: { status: "not-requested" }, cleanup: { status: "retained", errors: [] } }),
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify((await client.remote.recorder.connect(undefined)).value)), selection);
+  assert.equal((await client.remote.recorder.connectionState()).value.status, "connected");
+  assert.equal((await client.remote.recorder.importFirst(undefined)).value.cleanup.status, "retained");
+  assert.equal((await client.remote.recorder.disconnect()).value.status, "disconnected");
+});
+
+test("Remote preserves cleanup-unconfirmed state and rejects device work with cleanup code", async t => {
+  const warning = { status: "cleanup-unconfirmed", name: "", message: "idle cleanup failed" };
+  const { client } = await remoteRuntime(t, {
+    connectionState: async () => warning,
+    disconnect: async () => warning,
+    scan: async () => { throw Object.assign(new Error(warning.message), { name: "CleanupError" }); },
+  });
+  assert.equal((await client.remote.recorder.connectionState()).value.status, warning.status);
+  assert.equal((await client.remote.recorder.disconnect()).value.message, warning.message);
+  const result = await client.remote.recorder.scan();
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "recorder/cleanup-failed");
+});
+
 test("official Client and Host Gateways dispatch all six methods and preserve partial stages", async t => {
   const received = [];
   const service = Object.fromEntries(["scan", "status", "list", "recordState", "record", "importFirst", "transcribe"]
     .map(name => [name, async (...args) => { received.push([name, args]); return name === "importFirst" ? partial : name === "transcribe" ? transcriptResult : processResult; }]));
   const { host, client } = await remoteRuntime(t, service);
-  assert.deepEqual(remoteMethods(host.recorderController).map(x => x.method).sort(), ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice"].sort());
+  assert.deepEqual(remoteMethods(host.recorderController).map(x => x.method).sort(), ["scan", "status", "list", "record", "importFirst", "transcribe", "getDevice", "saveDevice", "connect", "disconnect", "connectionState"].sort());
   const remote = client.remote.recorder;
   const signal = new AbortController().signal;
   for (const name of ["scan", "status", "list"]) assert.equal((await remote[name](signal)).ok, true);
