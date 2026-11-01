@@ -22,7 +22,7 @@ Host CLI 原本已在模块内跨实例共享 BLE 队列。本次共享同一实
 - 所有方法声明最终 `signal` 取消参数；它不进入 JSON `args`。可选业务参数仍占调用位置，例如 `transcribe(file, undefined, signal)`、`importFirst(undefined, signal)`。
 - `status()` 是独立 CLI/BLE 操作，不作为扫描进度轮询。当前仅显示忙碌状态和最终文本，没有进度流。
 
-## 十二个方法（工作区新增 importFile，0.4.0 为十一个）
+## 十二个方法（0.5.0 新增 importFile，0.4.0 为十一个）
 
 | 方法 | 业务参数 | 返回值 |
 |---|---|---|

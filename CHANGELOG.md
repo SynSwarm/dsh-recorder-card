@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
+- Correct Skill reference checks to exclude Markdown fragments when resolving local files; preserve the diagnostic section link.
 - Add bounded transfer diagnostics for persistent operations and one-shot imports: stage durations, parsed data-frame/byte counters, first/last/end notification timing, queue wait and snapshot age. Preserve progress through timeout/cancellation and cleanup failures, carry it across Agent/Remote contracts, and atomically save the latest diagnostic under Host dataDir without audio, filenames or device identifiers. Offline coverage only; no new hardware acceptance claimed.
 - Separate roadmap implementation, offline checks, hardware acceptance and release status; prioritize non-first import, transfer diagnostics and recovery. Retain recording-control compatibility requirements and add CI/upgrade configuration checks; align contributor guidance with the current shared Host workflow.
 - Add exact on-card `filename` selection to `recorder_import` and a matching `importFile` Remote method; preserve default first-file import and staged, non-overwriting PCM publication. Named imports reuse the persistent Host session, including optional transcription.

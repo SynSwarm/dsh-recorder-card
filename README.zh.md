@@ -16,7 +16,7 @@
 
 **0.4.0 新增**：单个连接图标、Host 持续 BLE 会话，以及通过对话完成录音卡操作。`0.3.1` 使用旧配置卡片界面；本项目仍是开发预览版。
 
-**工作区新增，尚未发布**：`recorder_import` 可通过 `filename` 精确选择卡内录音，省略时仍导入首条。已连接时复用 Host 会话，无需手动 CLI 或断开交接。真实 DSH Agent 指定名称导入、完整音频校验及连接保留已验证；该测试文件恰位于首条，非首条与中断恢复仍待实机验证。见[验收记录](docs/import-recovery.md)。
+**0.5.0 新增**：`recorder_import` 可通过 `filename` 精确选择卡内录音，省略时仍导入首条。已连接时复用 Host 会话，无需手动 CLI 或断开交接。真实 DSH Agent 指定名称导入、完整音频校验及连接保留已验证；该测试文件恰位于首条，非首条与中断恢复仍待实机验证。见[验收记录](docs/import-recovery.md)。
 
 连接清理失败时，图标会保留“连接释放未确认”警告，待执行的设备请求先返回错误、不访问 BLE；请检查设备后再明确重试。进程退出本身不代表设备清理成功。
 
@@ -32,7 +32,7 @@
 | 浏览器直连 BLE | 已从发布入口移除 | 旧实现仅保留为历史回归测试夹具 |
 | Host 调用 Python CLI | 固定源码适配器及进程管理层已实现 | 内部列表调用实测、队列/取消本地测试通过；DSH 生命周期已验证，硬件工具验收待完成，固定 CLI 源码已随包分发，无需另行 clone |
 | `recorder_*` Agent 设备工具 | 八个工具已注册，提供配置 schema 与结构化进程结果 | schema、错误及取消测试通过；真实 Host 转写/复用通过，硬件操作仍待验收 |
-| 可选界面的 Client–Host 通信 | 工作区十二个方法；0.4.0 为十一个 | 新增 `importFile`，见[设计与验证](docs/client-host-remote.md)；没有传输进度流 |
+| 可选界面的 Client–Host 通信 | 0.5.0 十二个方法；0.4.0 为十一个 | 新增 `importFile`，见[设计与验证](docs/client-host-remote.md)；没有传输进度流 |
 | 转写后端与归档完整性 | 已实现音频/Markdown 安全发布、指纹复用与分阶段结果 | DSH 本机 SenseVoice 转写与工具复用通过；完整硬件恢复仍待验收 |
 
 验收标准见 [ROADMAP.md](ROADMAP.md)。[独立 CLI 部分实机记录](docs/cli-validation.md)已验证扫描、状态/列表响应及一条录音的传输与 WAV 完整解码；用户已确认播放正常、内容正确，录音控制和其他验收项仍待完成。后续已通过内部 Host 列表调用实测；远程开始录音无确认，实体键录音保存后列表成功增加。完整 DSH 工具验收仍未通过。
@@ -58,7 +58,7 @@ Host 需要 Python 3.11+、可用蓝牙及访问权限。插件已包含固定�
 
 1. 先唤醒卡片，断开手机和其他蓝牙客户端。点击录音卡图标，或让 Agent 调用 `recorder_connect`，自动连接并保存选择，无需填写地址。多设备时等待你选择。
 2. 在对话中说“查看录音列表”或“断开录音卡”。切换设备可用图标右键菜单，或让 Agent 用 `recorder_connect` 的空地址重新扫描；高级 `deviceAddress` 配置仍作为回退保留。npm 0.3.1 用户继续使用原卡片的设备地址输入框。
-3. 调用 `recorder_list`，选择允许导入的录音。已发布的 0.4.0 仅导入首条；本工作区支持 `recorder_import({ "filename": "列表中的完整文件名" })`，省略 `filename` 保持首条行为，默认不转写。多条按用户选定顺序逐条调用，遇到传输错误即停止，不必切到手动 CLI。
+3. 调用 `recorder_list`，选择允许导入的录音。0.4.0 仅导入首条；0.5.0 支持 `recorder_import({ "filename": "列表中的完整文件名" })`，省略 `filename` 保持首条行为，默认不转写。多条按用户选定顺序逐条调用，遇到传输错误即停止，不必切到手动 CLI。
 4. 默认音频位于 Host 用户目录 `~/.dsh-recorder-card/archive/audio/`；以工具返回的绝对路径为准。转写是单独的可选步骤：DSH 本地识别器需要先准备模型；豆包云端需要 ASR 凭据。扫描和导入不需要转写凭据。
 
 DSH/pnpm 若配置 `minimumReleaseAge=1440`，新版本发布 24 小时内可能暂时无法安装；等待成熟版本即可，不修改年龄门槛。
@@ -67,7 +67,7 @@ DSH/pnpm 若配置 `minimumReleaseAge=1440`，新版本发布 24 小时内可能
 
 新增错误码区分 `RECORDER_DEVICE_DISCONNECTED`（已观察到掉线）与 `RECORDER_TRANSFER_INTERRUPTED`（传输未完成，不能据此判定掉线）。检查设备、重新连接后可明确重试该文件，当前从头传输，不支持字节断点续传或自动重连。清理未确认时先处理清理警告；已经导入成功但转写失败时仅重试转写。
 
-工作区另补充传输诊断：分阶段耗时、收到的帧数/字节数，以及中断时最后快照的新旧程度。Host 将最近一次诊断写入 `dataDir/recorder-diagnostics.json`，不包含音频、文件名或设备标识。计数不代表完成百分比或音频完整性，界面尚无进度流。字段与边界见[诊断说明](docs/import-recovery.md#transfer-diagnostics)；本项仅完成离线验证。
+0.5.0 另补充传输诊断：分阶段耗时、收到的帧数/字节数，以及中断时最后快照的新旧程度。Host 将最近一次诊断写入 `dataDir/recorder-diagnostics.json`，不包含音频、文件名或设备标识。计数不代表完成百分比或音频完整性，界面尚无进度流。字段与边界见[诊断说明](docs/import-recovery.md#transfer-diagnostics)；本项仅完成离线验证。
 
 缺依赖时，错误会给出当前 Python 的安装命令。可在已安装插件目录执行 `python -B runtime/recorder_cli.py --check-deps` 做无蓝牙检查。完整平台支持范围及新用户实机验收仍以[发布验证记录](docs/distribution-validation.md)为准。
 
