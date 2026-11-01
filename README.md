@@ -4,7 +4,7 @@
 
 **`dsh-recorder-card`** is a third-party **DeepSeek Harness (DSH)** plugin under development for connecting **AI recorder cards** over BLE.
 
-> **Development preview:** the repository contains a plugin skeleton and browser card implementation. Import, transcription, and archive integration are not complete. DSH compatibility and hardware behavior still need verification. Published on npm as `dsh-recorder-card` (development preview).
+> **Development preview:** the repository contains a plugin skeleton and browser card implementation. Import, transcription, and archive integration are not complete. Host loading and lifecycle have passed in an isolated DSH 0.2.0-rc.2 profile; hardware and end-to-end acceptance remain incomplete. These workspace changes are not yet published. Published on npm as `dsh-recorder-card` (development preview).
 
 ## Purpose
 
@@ -12,25 +12,30 @@ The intended workflow is to record meetings, interviews, or notes on a dedicated
 
 The implementation follows the [upstream AI recorder card protocol](https://github.com/nextproto1024/ai-recorder-card-open-protocol). Support for a particular card or firmware must be verified; a shared product name alone does not establish compatibility.
 
+The main path is **DSH Host → Python CLI → recorder card**, with Bluetooth access on the Host machine. The browser Web Bluetooth card is optional. The Host registers six CLI-backed Agent tools; registration is verified, while device operations through DSH still need hardware acceptance.
+
 ## Current status
 
-“Implemented” means code exists, not that it has passed DSH or hardware testing. No verified compatibility baseline is recorded yet.
+“Implemented” means code exists, not that it has passed DSH or hardware testing. The recorded Host baseline is DSH Desktop 0.2.0-rc.2 on Windows, using an isolated headless profile.
 
 | Capability | Implementation | Verification / remaining work |
 |---|---|---|
-| Bundle manifest and Skill provider | Implemented; local contract/package checks pass | Verify loading and Skill discovery in DSH |
-| Browser connection, battery, recording state and controls | Implemented | Verify in the target browser with a real card |
-| Browser file listing | Implemented | Verify multi-frame lists and completion handling |
+| Bundle manifest and Skill provider | Implemented | M1 passed in an isolated DSH profile: loading, Skill access, disable/re-enable and child cleanup |
+| Browser connection, battery, recording state and controls | Implemented (optional enhancement, demoted) | Verify Web Bluetooth availability, permissions, and hardware in the target browser; not on the critical path |
+| Browser file listing | Implemented (optional enhancement, demoted) | Same as above; not on the critical path |
 | Browser file import | Placeholder | Button only displays a message; transfer and Host persistence are missing |
-| Host Python CLI calls | Wrapper implemented | CLI is not bundled; configuration and execution need verification |
-| `recorder_*` Agent tools and Client–Host communication | Not implemented | Registration and transport APIs need confirmation |
-| Transcription providers and archive integrity | Planned | No complete plugin workflow or verified default provider |
+| Host Python CLI calls | Pinned-source adapter and process manager | Internal listing hardware smoke test and local queue/cancellation tests pass; DSH lifecycle verified; hardware tool acceptance pending, external CLI still required |
+| `recorder_*` Agent device tools | Six tools registered, typed configuration and structured process results | Schema/error/cancellation tests pass; hardware import/control and default DSH transcription remain pending |
+| Client–Host communication for optional UI | Not implemented | Future UI reads status and sends commands through Host |
+| Transcription providers and archive integrity | Safe audio publication and separate stage results implemented | DSH transcription, transcript reuse and full archive acceptance pending |
 
-See [ROADMAP.md](ROADMAP.md) for acceptance criteria.
+See [ROADMAP.md](ROADMAP.md) for acceptance criteria. A [partial standalone CLI hardware run](docs/cli-validation.md) verified scan/status/list responses and a single-file transfer with complete WAV decoding; the user confirmed correct playback/content, while recording controls and remaining acceptance cases are pending. A later internal Host listing smoke test passed. Remote recording start remained unacknowledged; a physical-button recording appeared in the confirmed list. Full DSH tool acceptance remains pending.
+
+Import now preserves same-name audio, publishes complete staged files under a unique name when needed, and returns separate import/transcription states. Publication requires verified RIFF/WAVE PCM structure; truncated or unsupported audio remains unconfirmed. Transcription failure or unconfirmed connection cleanup returns `status: partial` with independent stage details; this is not full workflow success. See the [runtime contract](skill/references/runtime.md#safe-import-and-separate-transcription-results).
 
 Local regressions cover notification parsing, session/list cleanup, incomplete-list timeout warnings, and serialized session writes using simulated hooks and BLE. Run `npm test`; see [local checks](CONTRIBUTING.md#local-checks-without-hardware) for coverage and limits. These checks do not replace DSH or real-device verification.
 
-After a list timeout, write failure, or unconfirmed end response, disconnect and reconnect before reading the list again. Same-session retries are blocked to avoid treating late responses as a new complete list. Received entries remain explicitly unconfirmed; status and recording controls remain available.
+In the optional browser direct-connection mode, after a list timeout, write failure, or unconfirmed end response, disconnect and reconnect before reading the list again. Same-session retries are blocked to avoid treating late responses as a new complete list. Received entries remain explicitly unconfirmed; status and recording controls remain available.
 
 ## Installation status
 
@@ -45,20 +50,23 @@ There is currently no verified end-user installation procedure documented here.
 - A DSH environment exposing plugin development capabilities; supported versions/profiles are not established yet.
 - For browser experiments: Chrome or Edge with `navigator.bluetooth` available, Bluetooth access, and a protocol-compatible card. Record the actual browser/OS combination tested.
 - Node.js for syntax checks; the minimum version remains to be established with the target DSH runtime.
-- For Host CLI experiments only: a separate upstream checkout, Python, and that checkout's declared dependencies. This repository contains no `tools/` directory or Python requirements file.
+- For the Host CLI main path: a separate upstream checkout, Python, and that checkout's declared dependencies. This repository contains no `tools/` directory or Python requirements file.
 
 ## First development check
 
-1. Follow the local checks and candidate DSH loading procedure in [CONTRIBUTING.md](CONTRIBUTING.md).
-2. Verify that the card renders and the bundled Skill is discoverable.
-3. With a real device, verify connection, status, recording controls, and file listing separately.
-4. Record failures and environment details. Import and transcription are future acceptance steps, not working quick-start commands.
+1. Follow the [local checks](CONTRIBUTING.md). Prepare a pinned external CLI, Python/Bleak, and Bluetooth access on the intended Host machine.
+2. Start M2a independently: scan, read status/list, and import/play one non-personal test recording, then complete recording controls and failure scenarios. DSH loading is not a prerequisite.
+3. Reproduce [M1 Host validation](docs/dsh-integration.md) on the target environment. The isolated Windows baseline passed; card rendering remains a separate optional check.
+4. After M1 and M2a pass, follow M2b → M3 → M4 for DSH device tools, single-file import, and default transcription. Standalone CLI success does not establish a working plugin workflow.
 
 ## Architecture
 
 | Component | File | Current role |
 |---|---|---|
-| Host | [index.js](index.js) | Skill registration and internal Python CLI wrapper; tools/transport pending |
+| Host | [index.js](index.js) | Skill and tool registration, configuration; Client transport pending |
+| Agent tools | [runtime/tools.js](runtime/tools.js) | Six CLI-backed tools; process completion is separate from device/file verification |
+| Host process manager | [runtime/host-cli.js](runtime/host-cli.js) | Shared device queue, argument checks, deadlines, cancellation and disposal; live DSH validation pending |
+| CLI adapter | [runtime/recorder_cli.py](runtime/recorder_cli.py) | External source validation, list/record confirmations, per-process timeouts and connection cleanup |
 | Client | [client.js](client.js) | React card using browser BLE; import placeholder |
 | Skill | [skill/SKILL.md](skill/SKILL.md) | Capability checks, resource locations, and device constraints |
 | Protocol | [vendor/recorder-protocol.js](vendor/recorder-protocol.js) | CRC, frames, parsers, and command primitives |

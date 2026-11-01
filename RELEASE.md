@@ -8,7 +8,7 @@
 
 - [ ] 从 npm 注册表核对 `0.1.0` 的发布时间、tarball 地址和完整性摘要。
 - [ ] 将发布包与工作区逐项比较，确认已发布改动，补齐 [CHANGELOG](CHANGELOG.md) 的发布日期和版本范围。当前尚无完成该核对的记录。
-- [ ] 在干净环境中验证已发布版本的安装、启用、卡片显示和 Skill 发现。
+- [ ] 在干净环境中验证已发布版本的 Host 安装/启用和 Skill 发现；卡片显示单列为可选增强。
 
 ## 审核与信任模型
 
@@ -41,6 +41,6 @@
 
 1. 明确本次版本范围及已完成的验收；开发预览继续标注未完成能力。宣称支持完整流程前须完成 M1–M5，并落实 Python CLI 分发及依赖说明。
 2. （可选）补齐 `locale/` + `icon`。
-3. 运行 `npm run check:package` 核对实际 dry-run 清单。运行文件限于 `index.js`、`client.js`、`cordis.patch.yml`、`vendor/`、`skill/`（含 `skill/references/`）；另有 npm 自动包含的 `package.json`、README 和 LICENSE。确认 Skill 的本地引用随包提供，开发文档、测试及私人数据未进入包。
+3. 运行 `npm run check:package` 核对实际 dry-run 清单。运行文件限于 `index.js`、`client.js`、`cordis.patch.yml`、`vendor/`、`skill/`（含 `skill/references/`）、`runtime/recorder_cli.py`、`runtime/host-cli.js`、`runtime/tools.js`；另有 npm 自动包含的 `package.json`、README 和 LICENSE。确认 Skill 的本地引用随包提供，开发文档、测试及私人数据未进入包。
 4. 更新为尚未发布的新版本号，整理对应 CHANGELOG。核对后运行 `npm publish`，保存版本、发布时间和包完整性摘要。
-5. 干净环境验证：按目标 DSH 的实际 CLI schema 安装该次发布的明确版本（候选命令：`dsh plugin add dsh-recorder-card@<version>`，替换占位符）。记录安装参数、`application` 与 `warnings`，确认 `application: applied` 且卡片 / Skill 可见；仅安装成功不足以声明完整流程可用。
+5. 干净环境验证：按目标 DSH 的实际 CLI schema 安装该次发布的明确版本（候选命令：`dsh plugin add dsh-recorder-card@<version>`，替换占位符）。记录安装参数、`application` 与 `warnings`，确认 `application: applied`、Host 可加载且 Skill 可发现及读取资源；卡片显示单列为可选项。完整流程另按 M2a/M2b/M3/M4 验收，仅安装成功不足以声明可用。

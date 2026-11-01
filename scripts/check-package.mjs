@@ -16,10 +16,11 @@ const [pack] = JSON.parse(result.stdout);
 const included = new Set(pack.files.map((file) => file.path));
 const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 for (const path of [manifest.exports["."], manifest.exports["./client"], manifest.dsh.bundle.patch,
-  "skill/SKILL.md", "LICENSE", "vendor/recorder-protocol.js", "vendor/LICENSE"]) {
+  "skill/SKILL.md", "runtime/recorder_cli.py", "runtime/host-cli.js", "runtime/tools.js", "LICENSE", "vendor/recorder-protocol.js", "vendor/LICENSE"]) {
   assert.ok(included.has(path.replace(/^\.\//, "")), `Missing package entry: ${path}`);
 }
 for (const path of included) {
+  assert.ok(!/(?:^|\/)__pycache__(?:\/|$)|\.py[co]$/.test(path), `Python cache in package: ${path}`);
   assert.ok(!/^(?:archive|tests|scripts|docs|\.cursor|\.git|\.cache)\//.test(path), `Unexpected package content: ${path}`);
   assert.ok(!/(?:^|\/)(?:\.env(?:\..*)?|\.qs668-device)$/.test(path), `Private data in package: ${path}`);
 }

@@ -408,30 +408,32 @@ window.__ModuleLoader__.load({
 
       if (!session) {
         return h("div", { style: cardStyle },
-          h("button", { onClick: connect, disabled: connecting }, "连接录音卡"),
+          styleEl,
+          h("button", { className: "rec-btn rec-btn-primary", onClick: connect, disabled: connecting }, "连接录音卡"),
           connecting ? h("span", null, "正在连接…") : null,
           log ? h("div", null, log) : null);
       }
 
       return h("div", { style: cardStyle },
+        styleEl,
         h("div", { style: row },
           h("span", null, battery == null ? "电量 —" : `电量 ${battery}%`),
           h("span", null, recordStateLabel(recordState)),
-          h("button", { onClick: refreshStatus }, "刷新"),
-          h("button", { onClick: disconnect }, "断开")),
+          h("button", { className: "rec-btn", onClick: refreshStatus }, "刷新"),
+          h("button", { className: "rec-btn", onClick: disconnect }, "断开")),
         h("div", { style: row },
-          h("button", { onClick: () => record("start") }, "开始录音"),
-          h("button", { onClick: () => record("pause") }, "暂停"),
-          h("button", { onClick: () => record("resume") }, "继续"),
-          h("button", { onClick: () => record("save") }, "保存")),
+          h("button", { className: "rec-btn", onClick: () => record("start") }, "开始录音"),
+          h("button", { className: "rec-btn", onClick: () => record("pause") }, "暂停"),
+          h("button", { className: "rec-btn", onClick: () => record("resume") }, "继续"),
+          h("button", { className: "rec-btn", onClick: () => record("save") }, "保存")),
         h("div", { style: row },
-          h("button", { onClick: listFiles, disabled: listing || listBlocked }, "读取文件列表"),
+          h("button", { className: "rec-btn", onClick: listFiles, disabled: listing || listBlocked }, "读取文件列表"),
           h("span", null, files.length ? `${files.length} 个文件` : "")),
         listMessage ? h("div", { role: "status" }, listMessage) : null,
         files.length
           ? h("ul", null, files.map((f) =>
               h("li", { key: f.name }, f.name, " ",
-                h("button", { onClick: () => importFile(f) }, "导入"))))
+                h("button", { className: "rec-btn", onClick: () => importFile(f) }, "导入"))))
           : null,
         log ? h("div", null, log) : null);
     }
@@ -443,9 +445,38 @@ window.__ModuleLoader__.load({
     const cardStyle = {
       display: "flex", flexDirection: "column",
       gap: "var(--dsw-alias-space-2, 8px)", padding: "var(--dsw-alias-space-2, 8px)",
-      color: "var(--dsw-alias-text-primary, inherit)",
+      color: "var(--dsw-alias-label-primary, inherit)",
     };
     const row = { display: "flex", gap: "var(--dsw-alias-space-2, 8px)", alignItems: "center" };
+    const recButtonCss = `
+.rec-btn {
+  padding: 4px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  border-radius: var(--dsw-radius-lg, 8px);
+  border: 1px solid var(--dsw-alias-border-l1, transparent);
+  background: transparent;
+  color: var(--dsw-alias-label-primary, inherit);
+  cursor: pointer;
+  font-family: inherit;
+}
+.rec-btn:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+.rec-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.rec-btn-primary {
+  background: var(--dsw-alias-state-business-primary, #247bbf);
+  border-color: transparent;
+  color: #fff;
+}
+.rec-btn-primary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+`;
+    const styleEl = h("style", null, recButtonCss);
 
     return {
       inject: ["slots"],

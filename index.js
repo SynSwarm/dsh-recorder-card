@@ -4,24 +4,35 @@
 //   1. Registers the bundled `recorder-card-bringup` skill as a skill provider, so the
 //      SKILL.md ships with the bundle and reaches the agent catalog on demand.
 //
-// Skeleton pieces (exact registration APIs MUST be confirmed in the target
-// profile with `cordis_inspect_query` before relying on them):
+// Host CLI and tools (runtime acceptance remains separate from implementation):
 //   2. A `recorder` service that wraps the upstream Python CLI (tools/qs668-bringup.py,
 //      tools/qs668-transcribe.py) via Node child_process.
-//   3. Agent tools over that service, and the Host->Client Remote the card UI uses.
+//   3. Six Agent tools over that service. Client Remote remains unimplemented.
 //
-// The upstream CLI is the battle-tested path: it already handles the tricky BLE
+// The pinned upstream CLI handles the BLE
 // file-assembly rules (2-2 single 36-byte GATT write, AE22/AE23 separate framing,
 // filename extension recovery, no on-card delete). Prefer it over a Node BLE port
-// for the first integration.
+// for the first integration. The bundled adapter requires confirmed list/record
+// responses and cleans up partially initialized sessions; see runtime/recorder_cli.py.
 
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { createRecorderService } from "./runtime/host-cli.js";
 import { fileURLToPath } from "node:url";
+import { registerRecorderTools } from "./runtime/tools.js";
+import z from "@deepseek-ai/schemastery";
 
 export const name = "recorder-card";
-export const inject = ["skills"]; // plus shell/remote/tools once confirmed
+export const inject = ["skills", "tools"];
+
+// Configuration uses the same Schemastery contract as DSH 0.2.0-rc.2 plugins.
+export const Config = z.object({
+  python: z.string().default("python").description("Python interpreter on the DSH Host."),
+  repoRoot: z.string().description("Absolute external CLI checkout; defaults to Host working directory."),
+  deviceAddress: z.string().description("Local device identifier; required except for scan/transcribe."),
+  outDir: z.string().default("archive/audio").description("Import directory, relative to repoRoot or absolute."),
+  cliTimeoutMs: z.number().min(1).max(2147483647).step(1).default(190000).description("CLI execution timeout in milliseconds, excluding queue time."),
+});
 
 const SKILL_PATH = fileURLToPath(new URL("./skill/SKILL.md", import.meta.url));
 // Keep the skill description in sync with skill/SKILL.md frontmatter.
@@ -36,63 +47,6 @@ function parseSkill(raw) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(raw);
   if (!m) throw new Error(`recorder-card: ${SKILL_PATH} has no YAML frontmatter`);
   return { frontmatter: m[1], body: raw.slice(m[0].length).trim() };
-}
-
-// Thin wrapper over the upstream Python CLI. Each method maps 1:1 to a CLI verb.
-// spawn is fine inside the Host (Electron main / Node); the workspace sandbox
-// pipe restriction does not apply to plugin code running in the Host process.
-function runCli(python, script, args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(python, [script, ...args], { cwd, shell: false });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (err += d));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve({ code, out, err });
-      else reject(new Error(`recorder CLI exited ${code}: ${err || out}`));
-    });
-  });
-}
-
-function recorderService(ctx, config) {
-  const python = config.python ?? "python";
-  const repoRoot = config.repoRoot ?? process.cwd();
-  const bringup = `${repoRoot}/tools/qs668-bringup.py`;
-  const transcribe = `${repoRoot}/tools/qs668-transcribe.py`;
-  const address = config.deviceAddress;
-
-  return {
-    async scan() {
-      return runCli(python, bringup, ["--scan"], repoRoot);
-    },
-    async status() {
-      return runCli(python, bringup, ["--address", address, "--status"], repoRoot);
-    },
-    async list() {
-      return runCli(python, bringup, ["--address", address, "--list"], repoRoot);
-    },
-    async importFirst(outDir = config.outDir ?? "archive/audio", transcribeFlag = false) {
-      const args = ["--address", address, "--import-first", "--out", outDir];
-      if (transcribeFlag) args.push("--transcribe");
-      return runCli(python, bringup, args, repoRoot);
-    },
-    async record(action) {
-      return runCli(python, bringup, ["--address", address, "--record", action], repoRoot);
-    },
-    async recordState() {
-      return runCli(python, bringup, ["--address", address, "--record-state"], repoRoot);
-    },
-    // Transcription is provider-pluggable (see plan section 4):
-    //   doubao/openai -> upstream qs668-transcribe.py (env QS668_ASR_PROVIDER)
-    //   dsh/local     -> inject DSH speech-to-text / sensevoice (TODO)
-    async transcribe(file, { force = false } = {}) {
-      const args = [file];
-      if (force) args.push("--force");
-      return runCli(python, transcribe, args, repoRoot);
-    },
-  };
 }
 
 export function apply(ctx, config = {}) {
@@ -121,17 +75,14 @@ export function apply(ctx, config = {}) {
     },
   }));
 
-  // 2) Service + tools + Remote (skeleton).
+  // 2) Service + tools.
   //
-  // TODO (confirm exact APIs with cordis_inspect_query Service / Tool / Remote):
-  //   - Expose recorderService to the agent as tools (scan/status/list/import/
-  //     record/transcribe) and to the Client card via a session command or a
-  //     Typert Remote (see @deepseek-ai/dsh-experimental-client-ui-voice-input
-  //     for the ctx.remote.$mount pattern).
-  //   - For `transcriptionProvider: "dsh"|"local"`, inject the DSH speech
-  //     service here instead of shelling out.
-  const service = recorderService(ctx, config);
-  // dsh-skill 0.2.0-rc.2 registerProvider owns its Cordis effect and disposal.
+  // Tool registration mirrors @deepseek-ai/dsh-plugin-manager/tools. The
+  // Client->Host Remote (see dsh-experimental-client-ui-voice-input) and the
+  // DSH speech-to-text backend (transcriptionProvider "dsh"|"local") remain TODO.
+  const service = createRecorderService(config);
+  ctx.effect(() => () => service.dispose(), "recorder-card: CLI cancellation");
+  registerRecorderTools(ctx, service);
 
   // Keep a handle for later wiring; the plugin stays active.
   return service;

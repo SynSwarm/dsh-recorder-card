@@ -10,6 +10,17 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Added
 
+- Reject truncated or unsupported audio before import publication/transcription by checking RIFF/WAVE PCM structure and whole frames. Preserve independent device cleanup status/errors alongside transcription failures in the version-2 import result.
+
+- Protect imports with private staging and atomic no-replace publication; preserve same-name audio and add a unique suffix on collision. Report imported path/size/SHA-256 and separate transcription success/failure, including a retained-audio retry path. Fix the stale CLI validation status as a dated historical note.
+
+- Register six CLI-backed Agent tools with Config validation, structured process results, stable failure codes and cancellation forwarding. Respect the configured import directory when the tool argument is omitted.
+- Add eight tests using real Cordis/DSH registries and record M1 validation in an isolated DSH Desktop 0.2.0-rc.2 headless profile, including active synthetic child termination and disable/re-enable without duplicate tools or Skills. Hardware tool execution and DSH transcription remain pending.
+
+- Add a shared Host device queue, argument validation, subprocess deadlines/output limits, cancellation and awaitable plugin disposal. Include real-process Windows tests for termination, queue recovery and blocked cleanup; live DSH/BLE cancellation and POSIX validation remain pending.
+
+- Bundle a source-pinned Python device CLI adapter and offline behavior tests; route internal Host device methods through it and keep the external CLI separately installed.
+- Record partial M2a hardware validation against pinned upstream CLI/protocol commit `de42d1fbf19fc92064ac4688f71f42730c82267f`: device discovery, status/list responses, and a selected test recording imported and fully decoded as WAV. Document pending acceptance and upstream response-validation gaps; no DSH integration claimed.
 - Host Skill/manifest contract tests, an npm package preflight (`npm run check:package`), and an M1 source/verification record for the local DSH `0.2.0-rc.2` reference packages. Live Host and Slot verification remain pending.
 - Bundled Skill runtime reference covering external CLI prerequisites and output locations without depending on repository-only developer documents.
 - Dependency-free Node regression tests for notification parsing and simulated Client session/list lifecycle, available through `npm test`.
@@ -24,6 +35,7 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Changed
 
+- Make Host Python CLI the documented main path; split standalone CLI validation (M2a) from DSH device tools (M2b), remove browser UI from M1 acceptance, and align environment, failure-recovery, and BLE ownership guidance. No runtime behavior or milestone acceptance changed.
 - Remove hard-coded published versions from both READMEs so development-preview installation guidance stays current across patch releases.
 - Reconciled documentation with the recorded npm development-preview release, clarified remaining release acceptance, and replaced an unavailable discoverability reference with an actionable checklist.
 - Made `AGENTS.md` and `docs/roles/` the shared cross-tool entry and role definitions; documented explicit loading and retained `.cursor/rules/` as an optional Cursor adapter.
@@ -33,6 +45,8 @@ The existing entries below describe completed repository work. Their allocation 
 
 ### Fixed
 
+- Preserve failures from the first upstream disconnect attempt, including timeout/cancellation, even when upstream clears its client reference and a later cleanup call does nothing. Cover the pinned upstream Session implementation with offline regressions.
+- Reject incomplete/malformed CLI lists and unacknowledged recording commands, prevent ambiguous same-session retries, and attempt bounded cleanup after device-operation timeout or failed connection setup. Host cross-process ownership and plugin-disable cleanup remain pending.
 - Honor Skill load cancellation, restrict the provider to its owned locator, and return definitions without discovery-only fields. Removed the empty effect; DSH's Skill registry owns provider disposal.
 - Replace unshipped local Skill documentation links with a packaged runtime reference; align README installation status and default transcription plan with the existing manifest and roadmap decisions.
 - Distinguish file-list idle timeouts from device completion: show a persistent no-response or possibly-incomplete warning and identify confirmed empty lists separately.

@@ -12,14 +12,14 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 // this fixture must not be reported as an unload/reload integration test.
 function providerFixture() {
   const providers = [];
-  host.apply({ skills: { registerProvider(create) { providers.push(create()); } } });
+  host.apply({ tools: { register() {} }, effect(create) { create(); }, skills: { registerProvider(create) { providers.push(create()); } } });
   assert.equal(providers.length, 1);
   return providers[0];
 }
 
 test("Host advertises the bundled Skill with metadata matching its frontmatter", async () => {
   const provider = providerFixture();
-  assert.deepEqual(host.inject, ["skills"]);
+  assert.deepEqual(host.inject, ["skills", "tools"]);
   assert.equal(provider.name, "recorder-card");
   const candidates = await provider.list();
   assert.equal(candidates.length, 1);
