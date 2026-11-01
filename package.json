@@ -1,7 +1,7 @@
 {
   "name": "dsh-recorder-card",
-  "version": "0.1.1",
-  "description": "Development-preview DSH plugin for AI recorder cards, with browser BLE control and file-listing code. DSH and hardware verification pending; audio import and transcription integration are planned.",
+  "version": "0.2.0",
+  "description": "Development-preview DSH plugin for AI recorder cards, with browser BLE control, a pinned CLI adapter, and recorder_* agent tools for scan, list, import, and transcription. DSH integration and hardware verification pending.",
   "keywords": [
     "deepseek",
     "deepseek-harness",
