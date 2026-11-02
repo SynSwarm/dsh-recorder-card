@@ -6,16 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ## [Unreleased]
 
-Slow-link and cleanup fixes are recorded in `c348dba`; the user confirmed their QA passed on 2026-11-02. The optional budget preflight below was added afterward and awaits its own QA. All remain unpublished. See the [QA closure record](docs/import-recovery.md#qa-closure) for test results and hardware acceptance limits.
+## [0.6.0] - 2026-11-02
+
+Includes `c348dba` and `8be0d8e`; the user confirmed QA passed and authorized publication. Development preview: hardware acceptance limits remain. Publication status is tracked in [RELEASE.md](RELEASE.md).
 
 - Add opt-in import budget preflight to Host, Agent and Remote: caller-supplied exported-byte and payload-rate estimates can reject before import dispatch and suggest a larger timeout. Keep current behavior without estimates; do not infer WAV bytes from compressed list size or claim automatic large-file detection.
 
 - Validate one-shot import cleanup before releasing the shared BLE queue, including missing, malformed and unsupported reports after process termination. Distinguish failures proven not to have started a process; otherwise notify queued callers of unconfirmed cleanup before dispatch, retaining saved-audio partial results and the original operation error.
-- Reorganize both READMEs around physical-recorder imports, hardware requirements, installation and evidence boundaries. Add source-linked discovery guidance, directory/community drafts and repository metadata; external submissions and npm metadata publication remain pending.
+- Reorganize both READMEs around physical-recorder imports, hardware requirements, installation and evidence boundaries. Add source-linked discovery guidance, directory/community drafts and repository metadata; external directory submissions remain pending.
 - Propagate the Host BLE watchdog setting into both Python operation budgets with a cleanup reserve; classify Python deadlines as timeouts. Keep the default 180-second Python budget while allowing longer configured transfers.
 - Adapt the pinned importer's runtime idle threshold within 12–20 seconds using a bounded frame-interval window; add median/p95/max, stall count and data-idle diagnostics without changing vendored sources or enabling resume.
 - Verify the original BLE client's state after disconnect and, after interrupted transfers, wait briefly for that device to advertise again. Preserve unconfirmed release/readiness when either check fails; forced process termination still cannot guarantee cleanup.
-- Correct the roadmap's timeout diagnosis: 1.2 seconds is the list threshold, while audio import used 12 seconds. Retain batch recovery and preflight estimation as pending work with explicit evidence requirements.
+- Correct the roadmap's timeout diagnosis: 1.2 seconds is the list threshold, while audio import used 12 seconds. Retain batch recovery and automatic metadata-based preflight estimation as pending work with explicit evidence requirements.
 
 ## [0.5.0] - 2026-11-02
 

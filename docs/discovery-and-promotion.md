@@ -16,7 +16,7 @@ topic 增加可发现性，但每个目录有自己的筛选、同步及审核�
 
 ## 仓库材料
 
-本项目已经声明 `dsh.bundle.patch: ./cordis.patch.yml` 和 `dsh.client`，无需为了推广虚构 `dsh.plugin` 字段。包名含 dsh 不替代有效 manifest。工作区已补充 npm `repository`、`homepage`、`bugs`、MIT 标识及发现关键词；这些元数据需要后续新版本发布才进入 npm，不能修改已发布的 0.5.0。[当前清单](../package.json)
+本项目已经声明 `dsh.bundle.patch: ./cordis.patch.yml` 和 `dsh.client`，无需为了推广虚构 `dsh.plugin` 字段。包名含 dsh 不替代有效 manifest。工作区已补充 npm `repository`、`homepage`、`bugs`、MIT 标识及发现关键词；这些元数据已随 0.6.0 发布并核验；0.5.0 历史元数据不变。[当前清单](../package.json)
 
 GitHub About 建议文案：
 
@@ -75,7 +75,7 @@ PR 说明应注明：npm 包 `dsh-recorder-card`、MIT、Host 执行边界、已
 >
 > 使用前需要兼容的实体 BLE 录音卡、电脑蓝牙及 Python 3.11+。固定上游 CLI 已随包提供，不需要另行 clone。转写可以用已准备好的 DSH 识别器，云端回退会上传音频，需要明确请求转写。
 >
-> npm 0.5.0 是开发预览。一条短测试录音已通过真实 DSH 指定名称导入和音频完整性检查；本机 SenseVoice 转写与归档复用另有验证。该录音恰为列表首条，非首条、长录音、中断恢复和远程录音控制仍未完整验收。工作区正在补慢链路处理，这部分尚未发布，不承诺 BLE 提速或断点续传。
+> npm 0.6.0 是开发预览。一条短测试录音已通过真实 DSH 指定名称导入和音频完整性检查；本机 SenseVoice 转写与归档复用另有验证。该录音恰为列表首条，非首条、长录音、中断恢复和远程录音控制仍未完整验收。0.6.0 增加慢链路容忍、清理修复和可选预算预检，已有离线测试及 QA，未新增实机验收，不承诺 BLE 提速或断点续传。
 >
 > 源码与安装说明：https://github.com/SynSwarm/dsh-recorder-card
 >

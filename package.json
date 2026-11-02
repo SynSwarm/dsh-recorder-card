@@ -1,6 +1,6 @@
 {
   "name": "dsh-recorder-card",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Development-preview DSH plugin to import recordings from compatible BLE recorder cards, with optional transcription and fingerprint-linked archives. Requires recorder hardware, Host Bluetooth and Python dependencies.",
   "license": "MIT",
   "repository": {
