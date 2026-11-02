@@ -7,12 +7,13 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 from pathlib import Path
 import sys
 
 from recorder_cli import (load_upstream, configure_runtime, require_dependency,
                           confirmed_list, confirmed_record, safe_import_file, ImportReport, select_import_file,
-                          Diagnostics, diagnostic_stage)
+                          Diagnostics, diagnostic_stage, confirmed_disconnect)
 
 
 class Worker:
@@ -37,7 +38,7 @@ class Worker:
         if session is not None:
             try:
                 with diagnostic_stage(self.trace, "cleanup"):
-                    await asyncio.wait_for(session.disconnect(), 5)
+                    await asyncio.wait_for(confirmed_disconnect(session, session.disconnect, self.upstream, self.address), 5)
             except BaseException as error:
                 self.cleanup_error = str(error) or type(error).__name__
                 # Idle retirement has no request id to reply to. Send the same
@@ -112,7 +113,7 @@ class Worker:
             selected = select_import_file(files, args.get("filename") if method == "importFile" else None)
             report = ImportReport()
             await safe_import_file(self.upstream.import_file, session, selected.name,
-                                   Path(args["outDir"]), report, self.trace)
+                                   Path(args["outDir"]), report, self.trace, self.upstream)
             # Intentionally retained by Host, distinct from confirmed release.
             report.data["cleanup"] = {"status": "retained", "errors": []}
             return report.data
@@ -169,7 +170,7 @@ async def serve(upstream, source, emit, timeout=180):
             except Exception as error:
                 worker.trace.fail(error)
                 # Preserve the primary cause before cleanup changes Session.client.
-                error_code = "DEVICE_DISCONNECTED" if worker.dropped.is_set() else getattr(error, "code", None)
+                error_code = "DEVICE_DISCONNECTED" if worker.dropped.is_set() else "OPERATION_TIMEOUT" if isinstance(error, TimeoutError) else getattr(error, "code", None)
                 message = str(error) or type(error).__name__
                 if error_code == "DEVICE_DISCONNECTED" and request["method"] in ("importFirst", "importFile"):
                     message += "; inspect device, reconnect and explicitly retry this file from the beginning (no resume)"
@@ -201,7 +202,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--timeout", type=float, default=180.0, help="Per-request operation budget in seconds, excluding cleanup")
     args = parser.parse_args()
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be finite and positive")
     wire = sys.stdout
     def emit(value):
         wire.write(json.dumps(value, ensure_ascii=False) + "\n")
@@ -211,7 +215,7 @@ def main():
         require_dependency("bleak")
         configure_runtime(upstream, args.data_dir)
         args.data_dir.mkdir(parents=True, exist_ok=True)
-        asyncio.run(serve(upstream, sys.stdin, emit))
+        asyncio.run(serve(upstream, sys.stdin, emit, timeout=args.timeout))
 
 
 if __name__ == "__main__":

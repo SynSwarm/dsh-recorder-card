@@ -2,46 +2,27 @@
 
 [English](README.md) · [贡献指南](CONTRIBUTING.md) · [路线图](ROADMAP.md) · [架构](docs/architecture.md) · [更新记录](CHANGELOG.md)
 
-**`dsh-recorder-card`** 是一个开发中的第三方 **DeepSeek Harness (DSH)** 插件，用于通过 BLE 接入 **AI 录音卡**。
+**把实体录音卡里的线下录音带进 DeepSeek Harness（DSH）**：在对话中选取录音，通过 BLE 导入，再按需转写和归档。
 
-> **开发预览：** 当前构建包含 Host 工具、随包 CLI、安全导入、默认 DSH 转写与指纹关联归档。真实 DSH Host 已通过本机 SenseVoice 转写及工具复用验证；完整硬件流程仍待验收。上述能力属于 0.3.0 开发预览版，npm 上更早版本的能力不同。
+**使用前需要一张兼容的实体 BLE 录音卡**，以及运行 DSH Host 的电脑上的 Python 3.11+、蓝牙硬件和权限。远程 Host 使用它所在机器的蓝牙；具体卡片和固件兼容性仍需验证。
+
+> **第三方开发预览。** npm 0.5.0 已提供按名称导入和传输诊断；一条短测试录音通过真实 DSH 导入和音频校验，本机 SenseVoice 转写及归档复用另有 Host 验证。非首条、长录音、中断恢复及远程录音控制尚未完整验收。工作区新增的慢链路修复**尚未发布**。[开始安装](#安装与首次使用) · [验证状态](#当前状态) · [发布记录](RELEASE.md)
 
 ## 项目用途
 
-目标流程是：用专用设备记录会议、采访或笔记，通过 BLE 传回音频，再在 DSH 中归档并转写。硬件录音不使用电脑麦克风。
+面向已经使用录音卡记录会议、采访或语音笔记的用户：录完后把音频带入 DSH 工作流。采集发生在卡片上，使用时无需通过电脑麦克风录制。
 
 实现依据[上游 AI 录音卡协议](https://github.com/nextproto1024/ai-recorder-card-open-protocol)。具体卡片和固件是否兼容，需要实测确认；产品名称相同不代表协议兼容。
 
-主路线为 **DSH Host → 随包 Python CLI → 录音卡**，要求 Host 所在机器可访问蓝牙。八个 Agent 工具与连接图标共用同一个 Host 服务，通过 Typert Remote 通信，不使用 Web Bluetooth。
+**音频路径：** 录音卡 → BLE → DSH Host 上的随包 Python CLI → 本地音频 → 可选转写及指纹关联的 Markdown 归档。
 
-**0.4.0 新增**：单个连接图标、Host 持续 BLE 会话，以及通过对话完成录音卡操作。`0.3.1` 使用旧配置卡片界面；本项目仍是开发预览版。
+- 点击一个图标连接，在对话中查看列表并选择卡内文件原名。
+- 导入本地目录前检查 PCM 完整性，已有音频不覆盖，卡内原件保留。
+- 需要时再请求转写，优先使用已准备好的 DSH 识别器；云端回退会上传音频，需明确提出转写。
 
-**0.5.0 新增**：`recorder_import` 可通过 `filename` 精确选择卡内录音，省略时仍导入首条。已连接时复用 Host 会话，无需手动 CLI 或断开交接。真实 DSH Agent 指定名称导入、完整音频校验及连接保留已验证；该测试文件恰位于首条，非首条与中断恢复仍待实机验证。见[验收记录](docs/import-recovery.md)。
+连接图标与八个 Agent 工具共用持久 Host 服务，无需 Web Bluetooth 或单独 clone 上游。运行边界见[架构](docs/architecture.md)，已经测到哪一步见[验收记录](docs/import-recovery.md)。
 
 连接清理失败时，图标会保留“连接释放未确认”警告，待执行的设备请求先返回错误、不访问 BLE；请检查设备后再明确重试。进程退出本身不代表设备清理成功。
-
-## 当前状态
-
-“已有实现”仅表示存在代码，不代表已经通过 DSH 或硬件测试。已记录 Windows 上 DSH Desktop 0.2.0-rc.2 隔离 headless profile 的 Host 基线。
-
-| 能力 | 实现状态 | 验证情况 / 剩余工作 |
-|---|---|---|
-| Bundle 清单和 Skill provider | 已实现 | M1 隔离 DSH 验证通过：加载、Skill 访问、启停与子进程清理 |
-| 单图标连接及对话引导 | 0.4.0 已实现 | 原生桌面连接变色、引导提交及草稿保留通过；模型回复、物理掉线及多实体卡待验证 |
-| 通过对话导入录音 | 首条导入已发布；按列表原名选择已在工作区实现 | 真实 DSH Agent 指定名称导入及连接保留通过；测试文件位于首条，非首条与中断恢复待实机复测 |
-| 浏览器直连 BLE | 已从发布入口移除 | 旧实现仅保留为历史回归测试夹具 |
-| Host 调用 Python CLI | 固定源码适配器及进程管理层已实现 | 内部列表调用实测、队列/取消本地测试通过；DSH 生命周期已验证，硬件工具验收待完成，固定 CLI 源码已随包分发，无需另行 clone |
-| `recorder_*` Agent 设备工具 | 八个工具已注册，提供配置 schema 与结构化进程结果 | schema、错误及取消测试通过；真实 Host 转写/复用通过，硬件操作仍待验收 |
-| 可选界面的 Client–Host 通信 | 0.5.0 十二个方法；0.4.0 为十一个 | 新增 `importFile`，见[设计与验证](docs/client-host-remote.md)；没有传输进度流 |
-| 转写后端与归档完整性 | 已实现音频/Markdown 安全发布、指纹复用与分阶段结果 | DSH 本机 SenseVoice 转写与工具复用通过；完整硬件恢复仍待验收 |
-
-验收标准见 [ROADMAP.md](ROADMAP.md)。[独立 CLI 部分实机记录](docs/cli-validation.md)已验证扫描、状态/列表响应及一条录音的传输与 WAV 完整解码；用户已确认播放正常、内容正确，录音控制和其他验收项仍待完成。后续已通过内部 Host 列表调用实测；远程开始录音无确认，实体键录音保存后列表成功增加。完整 DSH 工具验收仍未通过。
-
-导入已保护同名音频，完整暂存文件在冲突时另取名字发布，并分别返回导入和转写状态。发布前验证 RIFF/WAVE PCM 结构，截断或未知格式报告未确认。转写失败或连接清理未确认返回 `status: partial`，并保留独立阶段详情，不能视为全流程成功。见[运行合约](skill/references/runtime.md#safe-import-and-separate-transcription-results)。
-
-本地回归覆盖官方 Client/Host Gateway 的进程内 JSON 通信、卡片 hooks、取消、部分导入结果，以及与 Agent 工具共享服务。旧浏览器 BLE 测试保留为历史回归。运行 `npm test`；限制见[本地检查](CONTRIBUTING.md#local-checks-without-hardware)，不能替代桌面或实机验收。
-
-点击录音卡图标，自动连接上次设备；首次使用时扫描，只有一张卡时连接并记住，多张卡时在对话中选择。灰色表示未连接，闪动表示连接中，绿色表示 Host 确认 BLE 连接；连接中再次点击可取消。连接成功后向当前对话发送引导请求，保留输入框草稿；列表、首条导入和转写通过对话完成。右键或 Shift+F10 可断开、切换设备。工具栏不再展开配置表单。转写须明确提出，云端回退会上传音频。
 
 ## 安装与首次使用
 
@@ -71,9 +52,34 @@ DSH/pnpm 若配置 `minimumReleaseAge=1440`，新版本发布 24 小时内可能
 
 缺依赖时，错误会给出当前 Python 的安装命令。可在已安装插件目录执行 `python -B runtime/recorder_cli.py --check-deps` 做无蓝牙检查。完整平台支持范围及新用户实机验收仍以[发布验证记录](docs/distribution-validation.md)为准。
 
+## 当前状态
+
+“已有实现”仅表示存在代码，不代表已经通过 DSH 或硬件测试。已记录 Windows 上 DSH Desktop 0.2.0-rc.2 隔离 headless profile 的 Host 基线。
+
+| 能力 | 实现状态 | 验证情况 / 剩余工作 |
+|---|---|---|
+| Bundle 清单和 Skill provider | 已实现 | M1 隔离 DSH 验证通过：加载、Skill 访问、启停与子进程清理 |
+| 单图标连接及对话引导 | 0.4.0 已实现 | 原生桌面连接变色、引导提交及草稿保留通过；模型回复、物理掉线及多实体卡待验证 |
+| 通过对话导入录音 | 首条和按列表原名导入均已随 0.5.0 发布 | 真实 DSH Agent 指定名称导入及连接保留通过；测试文件位于首条，非首条与中断恢复待实机复测 |
+| 浏览器直连 BLE | 已从发布入口移除 | 旧实现仅保留为历史回归测试夹具 |
+| Host 调用 Python CLI | 固定源码适配器及进程管理层已实现 | 内部列表调用实测、队列/取消本地测试通过；DSH 生命周期已验证，硬件工具验收待完成，固定 CLI 源码已随包分发，无需另行 clone |
+| `recorder_*` Agent 设备工具 | 八个工具已注册，提供配置 schema 与结构化进程结果 | schema、错误及取消测试通过；真实 Host 转写/复用通过，硬件操作仍待验收 |
+| 可选界面的 Client–Host 通信 | 0.5.0 十二个方法；0.4.0 为十一个 | 新增 `importFile`，见[设计与验证](docs/client-host-remote.md)；没有传输进度流 |
+| 转写后端与归档完整性 | 已实现音频/Markdown 安全发布、指纹复用与分阶段结果 | DSH 本机 SenseVoice 转写与工具复用通过；完整硬件恢复仍待验收 |
+
+验收标准见 [ROADMAP.md](ROADMAP.md)。[独立 CLI 部分实机记录](docs/cli-validation.md)已验证扫描、状态/列表响应及一条录音的传输与 WAV 完整解码；用户已确认播放正常、内容正确，录音控制和其他验收项仍待完成。后续已通过内部 Host 列表调用实测；远程开始录音无确认，实体键录音保存后列表成功增加。完整 DSH 工具验收仍未通过。
+
+导入已保护同名音频，完整暂存文件在冲突时另取名字发布，并分别返回导入和转写状态。发布前验证 RIFF/WAVE PCM 结构，截断或未知格式报告未确认。转写失败或连接清理未确认返回 `status: partial`，并保留独立阶段详情，不能视为全流程成功。见[运行合约](skill/references/runtime.md#safe-import-and-separate-transcription-results)。
+
+本地回归覆盖官方 Client/Host Gateway 的进程内 JSON 通信、卡片 hooks、取消、部分导入结果，以及与 Agent 工具共享服务。旧浏览器 BLE 测试保留为历史回归。运行 `npm test`；限制见[本地检查](CONTRIBUTING.md#local-checks-without-hardware)，不能替代桌面或实机验收。
+
+点击录音卡图标，自动连接上次设备；首次使用时扫描，只有一张卡时连接并记住，多张卡时在对话中选择。灰色表示未连接，闪动表示连接中，绿色表示 Host 确认 BLE 连接；连接中再次点击可取消。连接成功后向当前对话发送引导请求，保留输入框草稿；列表、首条导入和转写通过对话完成。右键或 Shift+F10 可断开、切换设备。工具栏不再展开配置表单。转写须明确提出，云端回退会上传音频。
+
 ## 开发环境要求
 
-- 提供插件开发能力的 DSH 环境；支持的版本及 profile 尚未确定。
+**工作区慢链路修复，尚未发布**：`cliTimeoutMs` 同步到两条 Python 路径；导入空闲阈值在 12–20 秒内适应帧间隔，补充间隔统计，并在传输中止后检查本地断开及有界重新广播。需要 10 分钟 Python 操作预算时，可配置 `cliTimeoutMs: 610000`，其中 10 秒留给启动/清理。本项仅离线验证，不提高 BLE 速率，也不新增自动批量恢复或字节续传。见[范围与待验收项](docs/import-recovery.md#slow-link-fixes)。
+
+- 提供插件开发能力的 DSH 环境；已有 Windows DSH Desktop 0.2.0-rc.2 基线，其他版本及 profile 仍需验证。
 - 可选卡片需要 DSH Client Gateway 和会话活动 Slot；蓝牙设备与权限位于 Host，不依赖浏览器 Web Bluetooth。
 - 本地语法检查需要 Node.js；最低支持版本待结合目标 DSH 运行时确定。
 - Host CLI 主线需要 Python 3.11+ 与 Bleak/requests；源码及依赖清单位于 `vendor/upstream/tools/`，随 npm 包分发。
@@ -128,6 +134,8 @@ archive/corpus/   # 转写 Markdown
 使用 AI 工具协作时，从 [AGENTS.md](AGENTS.md) 进入，再读取[开发者](docs/roles/open-source-developer.md)或 [QA](docs/roles/qa.md) 职责。这些文档供不同工具共用，`.cursor/rules/` 仅为可选的 Cursor 适配层。工具未自动发现入口时，按[角色使用说明](CONTRIBUTING.md#development-and-qa-roles)显式要求读取。
 
 请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。行为或状态变化时，同步维护本文件和 [README.md](README.md)。已完成的变化写入 [CHANGELOG.md](CHANGELOG.md)，未来工作放入 [ROADMAP.md](ROADMAP.md)。
+
+维护者准备目录提交或社区介绍时，可使用[发现与推广清单](docs/discovery-and-promotion.md)。
 
 ## 许可证与相关项目
 

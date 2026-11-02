@@ -46,9 +46,35 @@ class ConnectionWorkerTests(unittest.IsolatedAsyncioTestCase):
         Client.instances.clear()
         Client.fail_disconnect = False
         self.upstream = load_upstream(DEFAULT_REPO_ROOT)
-        self.patcher = patch.object(self.upstream, "import_bleak", return_value=(Client, None))
+        self.scanner = SimpleNamespace(find_device_by_address=AsyncMock(return_value=object()))
+        self.patcher = patch.object(self.upstream, "import_bleak", return_value=(Client, self.scanner))
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
+
+    async def test_import_failure_waits_for_advertising_and_preserves_unconfirmed_readiness(self):
+        self.scanner.find_device_by_address.return_value = None
+        requests = [
+            {"id": 1, "method": "connect", "args": {"address": "test"}},
+            {"id": 2, "method": "importFile", "args": {"filename": "test.wav"}},
+            {"id": 3, "method": "list"},
+        ]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(self.upstream, "read_status", AsyncMock()), \
+                patch.object(worker, "confirmed_list", AsyncMock(return_value=[SimpleNamespace(name="test.wav")])), \
+                patch.object(self.upstream, "import_file", AsyncMock(side_effect=RuntimeError("transfer stalled"))):
+            requests[1]["args"]["outDir"] = directory
+            messages = []
+            source = io.StringIO('\n'.join(json.dumps(value) for value in requests) + '\n')
+            await worker.serve(self.upstream, source, messages.append)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        failure = next(m for m in messages if m.get("id") == 2)
+        self.assertEqual(failure["errorCode"], "TRANSFER_INTERRUPTED")
+        self.assertIn("re-advertising", failure["cleanupError"])
+        self.assertEqual(failure["diagnostics"]["cleanup"], "unconfirmed")
+        self.assertEqual(failure["diagnostics"]["failedPhase"], "transfer")
+        self.assertFalse(any(m.get("id") == 3 for m in messages))
+        self.assertEqual(Client.instances[0].disconnects, 1)
+        self.scanner.find_device_by_address.assert_awaited_once_with("test", timeout=3.0)
 
     async def test_named_import_reuses_session_and_publishes_only_selected_audio(self):
         owner = worker.Worker(self.upstream, lambda _: None)

@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from collections import deque
+import statistics
 import hashlib
 import importlib.util
 import importlib
@@ -87,6 +89,14 @@ class Diagnostics:
         self.values = {"version": 1, "operation": operation, "phase": "starting", "outcome": "running",
                        "bytesReceived": 0, "dataFrames": 0, "attempts": 0, "cleanup": "pending"}
         self.transferring = False
+        self.intervals = deque(maxlen=32)
+        self.last_data = None
+        self.stalls = 0
+
+    def idle_seconds(self):
+        # Do not reduce the pinned importer's 12-second tolerance to the list's
+        # unrelated 1.2-second threshold. Bound growth for genuinely slow links.
+        return min(20.0, max(12.0, 3 * statistics.median(self.intervals) if self.intervals else 12.0))
 
     def elapsed(self):
         return max(0, round((self.clock() - self.started) * 1000))
@@ -118,6 +128,14 @@ class Diagnostics:
         now = self.elapsed()
         self.values.setdefault("firstFrameMs", now)
         if frame.cmd == 4:
+            moment = self.clock()
+            if self.last_data is not None:
+                gap = max(0, moment - self.last_data)
+                stall_threshold = max(5.0, 3 * statistics.median(self.intervals) if self.intervals else 5.0)
+                if gap > stall_threshold:
+                    self.stalls += 1
+                self.intervals.append(gap)
+            self.last_data = moment
             self.values.setdefault("firstDataMs", now)
             self.values["lastDataMs"] = now
             self.values["bytesReceived"] += len(frame.params)
@@ -135,6 +153,7 @@ class Diagnostics:
                 return await original_write(payload)
             self.values["attempts"] += 1
             self.transferring = True
+            self.last_data = None  # Never count time between filename candidates.
             with self.stage("importWrite"):
                 return await original_write(payload)
         def put(item):
@@ -154,6 +173,16 @@ class Diagnostics:
 
     def snapshot(self):
         result = {**self.values, **self.times, "elapsedMs": getattr(self, "finished", self.elapsed())}
+        if self.values["attempts"]:
+            result.update(idleTimeoutMs=round(self.idle_seconds() * 1000), stalls=self.stalls,
+                          frameIntervalSamples=len(self.intervals))
+            if self.intervals:
+                ordered = sorted(self.intervals)
+                result.update(frameIntervalMedianMs=round(statistics.median(ordered) * 1000),
+                              frameIntervalP95Ms=round(ordered[math.ceil(len(ordered) * .95) - 1] * 1000),
+                              frameIntervalMaxMs=round(ordered[-1] * 1000))
+            if self.transferring and self.last_data is not None and not hasattr(self, "finished"):
+                result["dataIdleMs"] = max(0, round((self.clock() - self.last_data) * 1000))
         for name, start in self.active:
             result[name + "Ms"] = result.get(name + "Ms", 0) + max(0, round((self.clock() - start) * 1000))
         return result
@@ -161,6 +190,45 @@ class Diagnostics:
 
 def diagnostic_stage(trace, name):
     return trace.stage(name) if trace else contextlib.nullcontext()
+
+
+async def adaptive_import(upstream, original_import, session, name, out, trace):
+    """Use the pinned importer unchanged, adjusting only its runtime idle policy.
+
+    Each process owns one serialized session, so this temporary module setting
+    cannot affect another import. The observer never consumes notification frames.
+    """
+    timing = trace or Diagnostics("import")
+    restore_trace = timing.attach(session) if trace is None else None
+    original_put = session.events.put_nowait
+    original_idle = getattr(upstream, "IMPORT_IDLE_S", 12.0)
+    upstream.IMPORT_IDLE_S = timing.idle_seconds()
+    def put(item):
+        original_put(item)  # Diagnostics attached outside observes the parsed frame first.
+        upstream.IMPORT_IDLE_S = timing.idle_seconds()
+    session.events.put_nowait = put
+    try:
+        return await original_import(session, name, out)
+    finally:
+        session.events.put_nowait = original_put
+        upstream.IMPORT_IDLE_S = original_idle
+        if restore_trace:
+            restore_trace()
+
+
+async def confirmed_disconnect(session, disconnect, upstream, address=None):
+    # Keep the original client: pinned Session clears its reference even if the
+    # backend's disconnect returned while still connected.
+    client = getattr(session, "client", None)
+    await disconnect()
+    if client is not None and client.is_connected:
+        raise RuntimeError("Local BLE client is still connected after disconnect; release unconfirmed")
+    if client is not None and getattr(session, "_recorder_import_failed", False) and address:
+        _client_class, scanner = upstream.import_bleak()
+        found = await scanner.find_device_by_address(address, timeout=3.0)
+        if found is None:
+            raise RuntimeError("Local disconnect completed, but device re-advertising was not observed within 3 seconds; "
+                               "release/readiness unconfirmed, wake or power-cycle the card before explicitly reconnecting")
 
 
 def select_import_file(files, filename=None):
@@ -350,7 +418,7 @@ def validate_audio(path):
             "sampleRate": pcm[1], "bitsPerSample": pcm[2], "frames": data_size // pcm[3]}
 
 
-async def safe_import_file(original_import, session, list_name, out_dir, report, trace=None):
+async def safe_import_file(original_import, session, list_name, out_dir, report, trace=None, upstream=None):
     destination = Path(out_dir).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     # Upstream may overwrite its target. Give it a fresh private directory only.
@@ -358,8 +426,13 @@ async def safe_import_file(original_import, session, list_name, out_dir, report,
         staging = Path(temporary).resolve()
         try:
             with diagnostic_stage(trace, "transfer"):
-                staged = Path(await original_import(session, list_name, staging))
-        except Exception as error:
+                staged = Path(await (adaptive_import(upstream, original_import, session, list_name, staging, trace)
+                                    if upstream else original_import(session, list_name, staging)))
+        except BaseException as error:
+            if session is not None:
+                session._recorder_import_failed = True
+            if not isinstance(error, Exception):
+                raise
             client = getattr(session, "client", None)
             disconnected = client is not None and not client.is_connected
             problem = TransferInterrupted(str(error) or type(error).__name__, disconnected=disconnected)
@@ -443,6 +516,7 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
             active.append(self)
 
         async def connect(self, address):
+            self._recorder_address = address
             with diagnostic_stage(trace, "connect"):
                 return await super().connect(address)
 
@@ -452,7 +526,8 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
             try:
                 # A second no-op must not inflate or replace the first cleanup stage.
                 with diagnostic_stage(trace if getattr(self, "client", True) else None, "cleanup"):
-                    return await asyncio.wait_for(super().disconnect(), cleanup_timeout)
+                    return await asyncio.wait_for(confirmed_disconnect(self, super().disconnect, upstream,
+                                                  getattr(self, "_recorder_address", None)), cleanup_timeout)
             except BaseException as error:
                 self._recorder_disconnect_errors.append(error)
                 raise
@@ -517,7 +592,7 @@ def install_guards(upstream, *, operation_timeout=180.0, cleanup_timeout=5.0, re
 
     if hasattr(upstream, "import_file"):
         original_import = upstream.import_file
-        upstream.import_file = lambda session, name, out: safe_import_file(original_import, session, name, out, report, trace)
+        upstream.import_file = lambda session, name, out: safe_import_file(original_import, session, name, out, report, trace, upstream)
     if hasattr(upstream, "read_status"):
         original_status = upstream.read_status
         async def status(session):

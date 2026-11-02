@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 import test_cli_adapter as fixtures
 import test_connection_worker as worker_fixtures
@@ -15,6 +15,128 @@ adapter = fixtures.adapter
 
 
 class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    def test_interval_window_is_bounded_and_separates_slow_frames_from_stalls(self):
+        now = [0.0]
+        trace = adapter.Diagnostics("import", clock=lambda: now[0])
+        trace.transferring = True
+        trace.values["attempts"] = 1
+        for _ in range(45):
+            now[0] += .156
+            trace.frame(fixtures.frame(2, 4, b"x" * 160))
+        now[0] += 8
+        trace.frame(fixtures.frame(2, 4, b"x" * 160))
+        value = trace.snapshot()
+        self.assertEqual(value["frameIntervalSamples"], 32)
+        self.assertEqual(value["frameIntervalMedianMs"], 156)
+        self.assertEqual(value["frameIntervalP95Ms"], 156)
+        self.assertEqual(value["frameIntervalMaxMs"], 8000)
+        self.assertEqual(value["stalls"], 1)
+        self.assertEqual(value["idleTimeoutMs"], 12000)
+        for _ in range(40):
+            now[0] += 9
+            trace.frame(fixtures.frame(2, 4, b"x"))
+        self.assertEqual(trace.snapshot()["idleTimeoutMs"], 20000)
+        now[0] += 3
+        self.assertEqual(trace.snapshot()["dataIdleMs"], 3000)
+
+    async def test_pinned_import_accepts_slow_transfer_and_restores_idle_setting(self):
+        upstream = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        now = [0.0]
+        trace = adapter.Diagnostics("import", clock=lambda: now[0])
+        audio = fixtures.pcm_audio(b"\x00\x01" * 200)
+        frames = [(0, fixtures.frame(2, 3, b"test.wav"))]
+        frames += [(6, fixtures.frame(2, 4, audio[i:i+12])) for i in range(0, len(audio), 12)]
+        frames[20] = (15, frames[20][1])  # Exceeds old 12s, below adapted 18s.
+        frames.append((0, fixtures.frame(2, 5, b"\0")))
+        session = fixtures.Session()
+        session.seq = 0
+        trace.attach(session)
+        waits = []
+        original_get = session.events.get
+        async def timed_get():
+            gap, frame = frames.pop(0)
+            now[0] += gap
+            session.events.put_nowait(frame)
+            return await original_get()
+        async def timed_wait(awaitable, timeout):
+            waits.append(timeout)
+            if frames[0][0] > timeout:
+                awaitable.close()
+                raise asyncio.TimeoutError()
+            return await awaitable
+        session.events.get = timed_get
+        upstream.time = SimpleNamespace(monotonic=lambda: now[0])
+        upstream.asyncio = SimpleNamespace(wait_for=timed_wait, TimeoutError=asyncio.TimeoutError)
+        with tempfile.TemporaryDirectory() as directory:
+            saved = await adapter.safe_import_file(upstream.import_file, session, "test.wav", Path(directory),
+                                                  adapter.ImportReport(), trace, upstream)
+            self.assertEqual(saved.read_bytes(), audio)
+        self.assertGreater(now[0], 180)
+        self.assertIn(18.0, waits)
+        self.assertEqual(upstream.IMPORT_IDLE_S, 12.0)
+        self.assertEqual(trace.snapshot()["dataFrames"], len(audio) // 12)
+
+    async def test_adaptive_import_restores_observers_and_policy_after_cancellation(self):
+        upstream = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        session = fixtures.Session()
+        original_put = session.events.put_nowait
+        ready = asyncio.Event()
+        async def wait(session, _name, _out):
+            await session.write_payload(b"\x02\x02")
+            ready.set()
+            await asyncio.Event().wait()
+        operation = asyncio.create_task(adapter.adaptive_import(upstream, wait, session, "test.wav", Path("unused"), None))
+        await ready.wait()
+        operation.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await operation
+        self.assertEqual(session.events.put_nowait, original_put)
+        self.assertEqual(upstream.IMPORT_IDLE_S, 12.0)
+
+    async def test_disconnect_checks_original_client_and_bounds_advertising_verification(self):
+        upstream = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        scanner = SimpleNamespace(find_device_by_address=AsyncMock(return_value=object()))
+        upstream.import_bleak = lambda: (None, scanner)
+        for stuck, found in [(True, object()), (False, None), (False, object())]:
+            scanner.find_device_by_address.reset_mock()
+            scanner.find_device_by_address.return_value = found
+            client = SimpleNamespace(is_connected=True)
+            session = SimpleNamespace(client=client, _recorder_import_failed=True)
+            async def disconnect():
+                client.is_connected = stuck
+                session.client = None
+            if stuck or found is None:
+                with self.assertRaisesRegex(RuntimeError, "still connected|re-advertising"):
+                    await adapter.confirmed_disconnect(session, disconnect, upstream, "test")
+            else:
+                await adapter.confirmed_disconnect(session, disconnect, upstream, "test")
+            if stuck:
+                scanner.find_device_by_address.assert_not_awaited()
+            else:
+                scanner.find_device_by_address.assert_awaited_once_with("test", timeout=3.0)
+
+    async def test_first_recovery_failure_remains_unconfirmed_after_upstream_clears_client(self):
+        upstream = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
+        client = worker_fixtures.Client
+        client.instances.clear()
+        client.fail_disconnect = False
+        scanner = SimpleNamespace(find_device_by_address=AsyncMock(return_value=None))
+        async def run(_args):
+            session = upstream.Session()
+            await session.connect("test")
+            session._recorder_import_failed = True
+            await session.disconnect()
+        upstream.run = run
+        report = adapter.ImportReport()
+        with patch.object(upstream, "import_bleak", return_value=(lambda addr: client(addr, lambda _: None), scanner)):
+            adapter.install_guards(upstream, report=report)
+            with self.assertRaisesRegex(RuntimeError, "re-advertising"):
+                await upstream.run(SimpleNamespace(import_first=True))
+        self.assertEqual(report.data["cleanup"]["status"], "unconfirmed")
+        self.assertEqual(report.data["diagnostics"]["cleanup"], "unconfirmed")
+        self.assertEqual(client.instances[-1].disconnects, 1)
+        scanner.find_device_by_address.assert_awaited_once()
+
     async def test_pinned_import_counts_fragmented_notifications_without_changing_audio(self):
         upstream = adapter.load_upstream(adapter.DEFAULT_REPO_ROOT)
         with patch.object(upstream, "import_bleak", return_value=(lambda _: None, None)):

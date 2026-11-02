@@ -355,13 +355,16 @@ class DisconnectHistoryTests(unittest.IsolatedAsyncioTestCase):
         module.Session = self.session_class()
         report = adapter.ImportReport()
         attempts = []
+        client = SimpleNamespace(is_connected=True)
 
         async def disconnect():
             attempts.append("disconnect")
+            client.is_connected = False
 
         async def run(_):
             session = module.Session()
-            session.client = SimpleNamespace(is_connected=True, disconnect=disconnect)
+            client.disconnect = disconnect
+            session.client = client
             await session.disconnect()
             return 0
 

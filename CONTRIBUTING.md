@@ -159,6 +159,7 @@ Current evidence and exact interface are in [Client–Host Remote](docs/client-h
 ## Documentation and change reporting
 
 - Keep English and Chinese README sections, status, and instructions aligned.
+- For repository metadata, directory submissions and community drafts, use the [discovery and promotion checklist](docs/discovery-and-promotion.md). Recheck channel rules at submission time; retain hardware requirements and distinguish published capabilities from workspace changes and acceptance evidence.
 - Update roadmap status using acceptance evidence; code alone is not a passed hardware milestone.
 - Keep completed changes in `CHANGELOG.md`; do not list planned backends or tools as working features.
 - Keep Skill frontmatter and the Host's `SKILL_DESCRIPTION` aligned.

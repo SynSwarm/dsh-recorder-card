@@ -1,18 +1,29 @@
 {
   "name": "dsh-recorder-card",
   "version": "0.5.0",
-  "description": "Development-preview DSH plugin for AI recorder cards: persistent Host BLE connection, conversation controls, safe audio import and DSH speech-to-text. Includes pinned Python CLI sources; requires Python dependencies and Host Bluetooth.",
+  "description": "Development-preview DSH plugin to import recordings from compatible BLE recorder cards, with optional transcription and fingerprint-linked archives. Requires recorder hardware, Host Bluetooth and Python dependencies.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SynSwarm/dsh-recorder-card.git"
+  },
+  "homepage": "https://github.com/SynSwarm/dsh-recorder-card#readme",
+  "bugs": {
+    "url": "https://github.com/SynSwarm/dsh-recorder-card/issues"
+  },
   "keywords": [
     "deepseek",
     "deepseek-harness",
     "dsh",
+    "dsh-plugin",
     "recorder",
     "recording-card",
     "voice-recorder",
     "ble",
     "bluetooth",
     "audio",
-    "ai-recorder"
+    "ai-recorder",
+    "meeting-transcription"
   ],
   "private": false,
   "type": "module",

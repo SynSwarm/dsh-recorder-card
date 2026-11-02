@@ -29,7 +29,8 @@ function createRecorderContract() {
     cleanup: ["pending", "retained", "succeeded", "not-needed", "unconfirmed"] };
   const metrics = ["elapsedMs", "bytesReceived", "dataFrames", "attempts", "queueMs", "snapshotAgeMs",
     "scanMs", "connectMs", "statusMs", "listMs", "importWriteMs", "transferMs", "validateMs", "publishMs", "cleanupMs",
-    "firstFrameMs", "firstDataMs", "lastDataMs", "endFrameMs", "endCode"];
+    "firstFrameMs", "firstDataMs", "lastDataMs", "endFrameMs", "endCode",
+    "frameIntervalSamples", "frameIntervalMedianMs", "frameIntervalP95Ms", "frameIntervalMaxMs", "stalls", "idleTimeoutMs", "dataIdleMs"];
   const requiredMetrics = ["elapsedMs", "bytesReceived", "dataFrames", "attempts"];
   const diagnostics = object({ version: oneOf(1),
     ...Object.fromEntries(Object.entries(diagnosticEnums).map(([key, values]) => [key, key === "failedPhase" ? optional(oneOf(...values)) : oneOf(...values)])),

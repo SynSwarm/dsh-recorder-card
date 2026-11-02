@@ -72,7 +72,7 @@ export function createConnection({ python, args, cwd, timeoutMs, terminate, onSt
           if (message.error || item.method === "disconnect" ||
               (item.method === "connect" && message.result?.status !== "connected")) expectingExit = true;
           if (message.cleanupError) warnCleanup(`Connection release is unconfirmed: ${message.cleanupError}`);
-          const failureName = { DEVICE_DISCONNECTED: "DeviceDisconnectedError", TRANSFER_INTERRUPTED: "TransferInterruptedError" }[message.errorCode];
+          const failureName = { DEVICE_DISCONNECTED: "DeviceDisconnectedError", TRANSFER_INTERRUPTED: "TransferInterruptedError", OPERATION_TIMEOUT: "TimeoutError" }[message.errorCode];
           if (message.error) item.reject(error(message.cleanupError ? "CleanupError" : failureName || "CliExitError",
             `${message.error}${message.cleanupError ? `; connection release unconfirmed: ${message.cleanupError}` : ""}`));
           else item.resolve(message.result);

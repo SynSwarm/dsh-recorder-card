@@ -8,9 +8,41 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createRecorderService, runProcess } from "../runtime/host-cli.js";
 import * as plugin from "../index.js";
 import { Context } from "@deepseek-ai/cordis";
+import { recoverCleanupNotice } from "./fixtures/cleanup-recovery.js";
 
 const integrity = { status: "verified", format: "wav-pcm", channels: 1, sampleRate: 16000, bitsPerSample: 16, frames: 2 };
 const cleanup = { status: "succeeded", errors: [] };
+
+test("configured watchdog reaches both Python entry points with a cleanup reserve", async () => {
+  for (const [cliTimeoutMs, expected] of [[190000, 180], [610000, 600], [1000, .5]]) {
+    let command, workerOptions, close;
+    const cli = createRecorderService({ cliTimeoutMs }, {
+      execute: async (_python, args, options) => { command = { args, options }; return { code: 0, out: "", err: "" }; },
+      openConnection: options => {
+        workerOptions = options;
+        return { closed: new Promise(resolve => { close = resolve; }),
+          request: async () => ({ status: "connected", name: "test" }), dispose: async () => close() };
+      },
+    });
+    try {
+      await cli.scan();
+      assert.equal(Number(command.args[command.args.indexOf("--timeout") + 1]), expected);
+      assert.ok(command.args.indexOf("--timeout") < command.args.indexOf("--"));
+      assert.equal(command.options.timeoutMs, cliTimeoutMs);
+      await cli.connect();
+      assert.equal(Number(workerOptions.args[workerOptions.args.indexOf("--timeout") + 1]), expected);
+      assert.equal(workerOptions.timeoutMs, cliTimeoutMs);
+    } finally { await cli.dispose(); }
+  }
+});
+
+test("adapter deadline exit has the timeout code rather than a generic CLI failure", async t => {
+  const cli = createRecorderService({}, { execute: async () => {
+    throw Object.assign(new Error("exit 124"), { name: "CliExitError", code: 124 });
+  } });
+  t.after(() => cli.dispose());
+  await assert.rejects(cli.scan(), { name: "TimeoutError", code: 124 });
+});
 
 test("named one-shot import passes one literal filename and rejects paths/batches before spawn", async t => {
   const dataDir = await temp(t), calls = [];
@@ -31,6 +63,7 @@ test("named one-shot import passes one literal filename and rejects paths/batche
 });
 
 test("one-shot import keeps typed transfer failures and prioritizes unconfirmed cleanup", async t => {
+  t.after(recoverCleanupNotice);
   const dataDir = await temp(t);
   let code = "TRANSFER_INTERRUPTED", cleanupStatus = "succeeded";
   const service = createRecorderService({ dataDir, deviceAddress: "test" }, { execute: async (_cmd, args) => {
@@ -327,6 +360,7 @@ test("import keeps saved audio and reports failed transcription with a retry pat
 });
 
 test("import without transcription requires a report and ignores misleading log output", async (t) => {
+  t.after(recoverCleanupNotice);
   const destination = await temp(t);
   let writesReport = true;
   const service = createRecorderService({ deviceAddress: "test-device" }, { execute: async (_cmd, args) => {
@@ -336,19 +370,20 @@ test("import without transcription requires a report and ignores misleading log 
   t.after(() => service.dispose());
   assert.equal((await service.importFirst(destination)).transcription.status, "not-requested");
   writesReport = false;
-  await assert.rejects(service.importFirst(destination), { name: "ImportResultError" });
+  await assert.rejects(service.importFirst(destination), { name: "CleanupError" });
 });
 
 test("invalid report and unconfirmed transcription cannot become successful import workflows", async (t) => {
   const destination = await temp(t);
-  for (const change of [value => ({ ...value, version: 99 }), value => ({ ...value, imports: [] }),
-    value => ({ ...value, transcriptions: [{ status: "running", audioPath: value.imports[0].path, exitCode: null }] })]) {
+  for (const [index, change] of [value => ({ ...value, version: 99 }), value => ({ ...value, imports: [] }),
+    value => ({ ...value, transcriptions: [{ status: "running", audioPath: value.imports[0].path, exitCode: null }] })].entries()) {
     const service = createRecorderService({ deviceAddress: "test-device" }, { execute: async (_cmd, args) => {
       await writeImportReport(args, { status: "succeeded", exitCode: 0 }, change);
       return { code: 0 };
     } });
-    await assert.rejects(service.importFirst(destination, true), { name: "ImportResultError" });
+    await assert.rejects(service.importFirst(destination, true), { name: index === 0 ? "CleanupError" : "ImportResultError" });
     await service.dispose();
+    if (index === 0) await recoverCleanupNotice();
   }
 });
 
@@ -377,6 +412,7 @@ test("interrupted transcription still reports the retained audio path", async (t
 });
 
 test("transcription and device cleanup failures both survive the partial result", async (t) => {
+  t.after(recoverCleanupNotice);
   const destination = await temp(t);
   const service = createRecorderService({ deviceAddress: "test-device" }, { execute: async (_cmd, args) => {
     await writeImportReport(args, { status: "failed", exitCode: 9, error: { code: "TRANSCRIPTION_FAILED", message: "quota" } }, value => ({
@@ -393,6 +429,7 @@ test("transcription and device cleanup failures both survive the partial result"
 });
 
 test("cleanup failure alone prevents an overall successful workflow", async (t) => {
+  t.after(recoverCleanupNotice);
   const destination = await temp(t);
   const service = createRecorderService({ deviceAddress: "test-device" }, { execute: async (_cmd, args) => {
     await writeImportReport(args, { status: "succeeded", exitCode: 0 }, value => ({
@@ -408,6 +445,7 @@ test("cleanup failure alone prevents an overall successful workflow", async (t) 
 });
 
 test("missing cleanup stays unconfirmed and missing integrity is rejected", async (t) => {
+  t.after(recoverCleanupNotice);
   const destination = await temp(t);
   let missingIntegrity = false;
   const service = createRecorderService({ deviceAddress: "test-device" }, { execute: async (_cmd, args) => {
@@ -423,5 +461,6 @@ test("missing cleanup stays unconfirmed and missing integrity is rejected", asyn
   assert.equal(result.status, "partial");
   assert.equal(result.cleanup.status, "unconfirmed");
   missingIntegrity = true;
-  await assert.rejects(service.importFirst(destination), { name: "ImportResultError" });
+  await assert.rejects(service.importFirst(destination), { name: "CleanupError", message: /no device operation was started/ });
+  await assert.rejects(service.importFirst(destination), error => error.name === "CleanupError" && error.cause.name === "ImportResultError");
 });

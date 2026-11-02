@@ -1,3 +1,4 @@
+import { recoverCleanupNotice } from "./fixtures/cleanup-recovery.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -17,7 +18,9 @@ import { registerRecorderTools } from "../runtime/tools.js";
 import { remoteRuntime } from "./fixtures/remote-runtime.js";
 
 const progress = { version: 1, operation: "import", phase: "transfer", outcome: "running", cleanup: "pending",
-  elapsedMs: 100, bytesReceived: 48, dataFrames: 2, attempts: 1, firstDataMs: 50, lastDataMs: 90 };
+  elapsedMs: 100, bytesReceived: 48, dataFrames: 2, attempts: 1, firstDataMs: 50, lastDataMs: 90,
+  frameIntervalSamples: 1, frameIntervalMedianMs: 40, frameIntervalP95Ms: 40, frameIntervalMaxMs: 40,
+  stalls: 0, idleTimeoutMs: 12000, dataIdleMs: 10 };
 const complete = { ...progress, phase: "done", outcome: "succeeded", cleanup: "retained", endFrameMs: 100, endCode: 0 };
 const failed = { ...progress, phase: "failed", failedPhase: "transfer", outcome: "failed", cleanup: "unconfirmed" };
 const imported = { status: "succeeded", import: { status: "succeeded", path: "test.wav", bytes: 48, sha256: "a".repeat(64),
@@ -111,7 +114,23 @@ test("worker terminal cleanup failure supersedes running progress without losing
   await checked;
 });
 
+test("Python operation deadline remains a timeout when cleanup is confirmed", async t => {
+  const { connection, sent, reply } = transport(t);
+  const request = connection.request("importFile");
+  const checked = assert.rejects(request, error => {
+    assert.equal(error.name, "TimeoutError");
+    assert.equal(error.diagnostics.cleanup, "succeeded");
+    assert.equal(error.diagnostics.frameIntervalMedianMs, 40);
+    return true;
+  });
+  await tick();
+  reply({ id: sent[0].id, error: "operation deadline", errorCode: "OPERATION_TIMEOUT",
+    diagnostics: { ...failed, cleanup: "succeeded" } });
+  await checked;
+});
+
 test("one-shot timeout recovers a heartbeat report, including queue delay and snapshot age", async t => {
+  t.after(recoverCleanupNotice);
   let observed;
   const cli = createRecorderService({ deviceAddress: "test" }, {
     onDiagnostic: value => { observed = value; },
@@ -124,7 +143,8 @@ test("one-shot timeout recovers a heartbeat report, including queue delay and sn
   });
   t.after(() => cli.dispose());
   await assert.rejects(cli.importFile("test.wav"), error => {
-    assert.equal(error.name, "TimeoutError");
+    assert.equal(error.name, "CleanupError");
+    assert.equal(error.cause.name, "TimeoutError");
     assert.equal(error.diagnostics.bytesReceived, 48);
     assert.equal(error.diagnostics.cleanup, "unconfirmed");
     assert.equal(error.diagnostics.outcome, "failed");
@@ -156,6 +176,7 @@ test("Host saves bounded diagnostics after cancellation even when DSH hides the 
 });
 
 test("one-shot final reports keep counters through success and cleanup error translation", async t => {
+  t.after(recoverCleanupNotice);
   let failure = false;
   const cli = createRecorderService({ deviceAddress: "test" }, { execute: async (_command, args) => {
     const diagnostics = failure ? failed : { ...complete, cleanup: "succeeded" };
@@ -180,6 +201,7 @@ test("one-shot final reports keep counters through success and cleanup error tra
 });
 
 test("diagnostic storage failure does not replace the primary operation error", async t => {
+  t.after(recoverCleanupNotice);
   t.mock.method(console, "warn", () => {});
   const cli = createRecorderService({ deviceAddress: "test" }, {
     onDiagnostic: async () => { throw Object.assign(new Error("read-only diagnostic store"), { code: "EACCES" }); },
@@ -187,8 +209,9 @@ test("diagnostic storage failure does not replace the primary operation error", 
   });
   t.after(() => cli.dispose());
   await assert.rejects(cli.importFile("test.wav"), error => {
-    assert.equal(error.name, "TimeoutError");
-    assert.equal(error.message, "test process deadline");
+    assert.equal(error.name, "CleanupError");
+    assert.equal(error.cause.name, "TimeoutError");
+    assert.equal(error.cause.message, "test process deadline");
     assert.equal(error.diagnostics.cleanup, "unconfirmed");
     return true;
   });

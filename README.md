@@ -2,46 +2,27 @@
 
 [中文](README.zh.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md) · [Architecture](docs/architecture.md) · [Changelog](CHANGELOG.md)
 
-**`dsh-recorder-card`** is a third-party **DeepSeek Harness (DSH)** plugin under development for connecting **AI recorder cards** over BLE.
+**Bring recordings from a physical recorder card into DeepSeek Harness (DSH)** — select a recording in conversation, import it over BLE, and optionally transcribe and archive it.
 
-> **Development preview:** the current build contains Host tools, bundled CLI sources, safe import, default DSH transcription and fingerprint-linked archives. Real DSH Host checks passed local SenseVoice transcription and tool reuse; full hardware acceptance remains incomplete. These features belong to the 0.3.0 development-preview release; earlier npm versions differ.
+**You need a compatible physical BLE recorder card**, plus Python 3.11+ and Bluetooth access on the machine running DSH Host. A remote Host uses its own Bluetooth hardware; card and firmware compatibility must be verified.
+
+> **Third-party development preview.** npm 0.5.0 includes named import and transfer diagnostics. A short test recording has passed real DSH import and audio checks; local SenseVoice transcription and archive reuse have separate Host evidence. Non-first and long-recording imports, interrupted-transfer recovery and remote recording controls remain incompletely verified. New slow-link fixes in this workspace are **not yet released**. [Install](#installation-and-first-use) · [Verification status](#current-status) · [Release record](RELEASE.md)
 
 ## Purpose
 
-The intended workflow is to record meetings, interviews, or notes on a dedicated device, transfer audio over BLE, and archive it with a transcript in DSH. Hardware recording does not use the computer's microphone.
+For people who already use a recorder card for meetings, interviews or voice notes: carry those recordings into a DSH workflow after recording. Capture uses the card; this workflow does not require recording through the computer microphone.
 
 The implementation follows the [upstream AI recorder card protocol](https://github.com/nextproto1024/ai-recorder-card-open-protocol). Support for a particular card or firmware must be verified; a shared product name alone does not establish compatibility.
 
-The main path is **DSH Host → bundled Python CLI → recorder card**, with Bluetooth access on the Host machine. Eight Agent tools and the connection icon share one Host service through Typert Remote, without Web Bluetooth.
+**Audio path:** recorder card → BLE → bundled Python CLI on DSH Host → local audio → optional transcript and fingerprint-linked Markdown archive.
 
-**New in 0.4.0:** a single connection icon and persistent Host BLE session, with recording workflows handled through conversation. Version `0.3.1` uses the previous settings card. This remains a development preview.
+- Click one icon to connect, then use conversation to list recordings and select an exact on-card filename.
+- Import into a local directory with PCM completeness checks and no overwriting of existing audio; keep the recording on the card.
+- Request transcription separately. Prefer a prepared DSH recognizer; cloud fallback uploads audio and requires explicit transcription intent.
 
-**New in 0.5.0:** `recorder_import` accepts an exact on-card `filename`; omission retains first-file behavior. It reuses the held Host session without an external CLI or connection handoff. A real DSH Agent named import, complete audio verification and retained connection passed. That test recording happened to be first in the list; non-first selection and interruption recovery still need hardware verification. See the [acceptance record](docs/import-recovery.md).
+The connection icon and eight Agent tools share a persistent Host service, without Web Bluetooth or a separate upstream checkout. See [architecture](docs/architecture.md) for execution boundaries and [acceptance evidence](docs/import-recovery.md) for what has actually been tested.
 
 If connection cleanup fails, the icon retains an unconfirmed-release warning. Pending device work fails before accessing BLE; inspect the card before explicitly retrying. A disconnected process alone is not proof of successful device cleanup.
-
-## Current status
-
-“Implemented” means code exists, not that it has passed DSH or hardware testing. The recorded Host baseline is DSH Desktop 0.2.0-rc.2 on Windows, using an isolated headless profile.
-
-| Capability | Implementation | Verification / remaining work |
-|---|---|---|
-| Bundle manifest and Skill provider | Implemented | M1 passed in an isolated DSH profile: loading, Skill access, disable/re-enable and child cleanup |
-| Single connection icon and conversation guidance | Implemented in 0.4.0 | Native desktop connection color, guidance submission and draft preservation pass; model reply, physical drops and multiple physical cards remain pending |
-| Import through conversation | First-file import released; exact list-name selection implemented in the workspace | Real DSH Agent named import and retained connection pass; test file was first in list, so non-first selection and interruption recovery remain pending |
-| Browser direct BLE | Retired from the shipped Client | Previous implementation retained only as a regression fixture |
-| Host Python CLI calls | Pinned-source adapter and process manager | Internal listing hardware smoke test and local queue/cancellation tests pass; DSH lifecycle verified; hardware tool acceptance pending, pinned CLI sources now bundled; no separate clone required |
-| `recorder_*` Agent device tools | Eight tools registered, typed configuration and structured process results | Schema/error/cancellation tests pass; real Host transcription/reuse pass; hardware import/control remain pending |
-| Client–Host communication for optional UI | Twelve methods in 0.5.0; eleven in 0.4.0 | Adds `importFile`; see [Remote design and validation](docs/client-host-remote.md); no transfer-progress stream |
-| Transcription providers and archive integrity | Safe audio/Markdown publication, fingerprint reuse and separate stage results implemented | Real Host SenseVoice transcription and tool reuse pass; full hardware recovery remains pending |
-
-See [ROADMAP.md](ROADMAP.md) for acceptance criteria. A [partial standalone CLI hardware run](docs/cli-validation.md) verified scan/status/list responses and a single-file transfer with complete WAV decoding; the user confirmed correct playback/content, while recording controls and remaining acceptance cases are pending. A later internal Host listing smoke test passed. Remote recording start remained unacknowledged; a physical-button recording appeared in the confirmed list. Full DSH tool acceptance remains pending.
-
-Import now preserves same-name audio, publishes complete staged files under a unique name when needed, and returns separate import/transcription states. Publication requires verified RIFF/WAVE PCM structure; truncated or unsupported audio remains unconfirmed. Transcription failure or unconfirmed connection cleanup returns `status: partial` with independent stage details; this is not full workflow success. See the [runtime contract](skill/references/runtime.md#safe-import-and-separate-transcription-results).
-
-Local regressions cover the actual official Client/Host Gateways over an in-process JSON carrier, card hooks, cancellation, partial imports, and service sharing with Agent tools. Legacy browser BLE tests remain as historical regressions. Run `npm test`; see [local checks](CONTRIBUTING.md#local-checks-without-hardware) for limits.
-
-Click the recorder icon to reconnect the saved card, or scan on first use. One discovered card connects automatically; multiple cards require a choice in the conversation. Gray means disconnected, pulsing means connecting, and green means Host-confirmed BLE connection. Click again while connecting to cancel. Connection success sends a guidance request to the current conversation without changing the composer draft. Use conversation commands for listing, first-file import and optional transcription. Right-click or Shift+F10 exposes disconnect and switch-device actions. No settings form expands in the toolbar. Cloud transcription fallback uploads audio and requires explicit transcription intent.
 
 ## Installation and first use
 
@@ -69,9 +50,34 @@ Version 0.5.0 also adds transfer diagnostics: phase timings, received frame/byte
 
 Install Python dependencies once using the same interpreter configured in the plugin. Alternatively, from the installed plugin directory run `python -m pip install -r vendor/upstream/tools/requirements.txt`. Missing-dependency errors name the active interpreter and installation command. From the installed plugin directory, `python -B runtime/recorder_cli.py --check-deps` checks setup without Bluetooth access. See the [distribution validation record](docs/distribution-validation.md) for tested environments and remaining acceptance.
 
+## Current status
+
+“Implemented” means code exists, not that it has passed DSH or hardware testing. The recorded Host baseline is DSH Desktop 0.2.0-rc.2 on Windows, using an isolated headless profile.
+
+| Capability | Implementation | Verification / remaining work |
+|---|---|---|
+| Bundle manifest and Skill provider | Implemented | M1 passed in an isolated DSH profile: loading, Skill access, disable/re-enable and child cleanup |
+| Single connection icon and conversation guidance | Implemented in 0.4.0 | Native desktop connection color, guidance submission and draft preservation pass; model reply, physical drops and multiple physical cards remain pending |
+| Import through conversation | First-file and exact list-name import released in 0.5.0 | Real DSH Agent named import and retained connection pass; test file was first in list, so non-first selection and interruption recovery remain pending |
+| Browser direct BLE | Retired from the shipped Client | Previous implementation retained only as a regression fixture |
+| Host Python CLI calls | Pinned-source adapter and process manager | Internal listing hardware smoke test and local queue/cancellation tests pass; DSH lifecycle verified; hardware tool acceptance pending, pinned CLI sources now bundled; no separate clone required |
+| `recorder_*` Agent device tools | Eight tools registered, typed configuration and structured process results | Schema/error/cancellation tests pass; real Host transcription/reuse pass; hardware import/control remain pending |
+| Client–Host communication for optional UI | Twelve methods in 0.5.0; eleven in 0.4.0 | Adds `importFile`; see [Remote design and validation](docs/client-host-remote.md); no transfer-progress stream |
+| Transcription providers and archive integrity | Safe audio/Markdown publication, fingerprint reuse and separate stage results implemented | Real Host SenseVoice transcription and tool reuse pass; full hardware recovery remains pending |
+
+See [ROADMAP.md](ROADMAP.md) for acceptance criteria. A [partial standalone CLI hardware run](docs/cli-validation.md) verified scan/status/list responses and a single-file transfer with complete WAV decoding; the user confirmed correct playback/content, while recording controls and remaining acceptance cases are pending. A later internal Host listing smoke test passed. Remote recording start remained unacknowledged; a physical-button recording appeared in the confirmed list. Full DSH tool acceptance remains pending.
+
+Import now preserves same-name audio, publishes complete staged files under a unique name when needed, and returns separate import/transcription states. Publication requires verified RIFF/WAVE PCM structure; truncated or unsupported audio remains unconfirmed. Transcription failure or unconfirmed connection cleanup returns `status: partial` with independent stage details; this is not full workflow success. See the [runtime contract](skill/references/runtime.md#safe-import-and-separate-transcription-results).
+
+Local regressions cover the actual official Client/Host Gateways over an in-process JSON carrier, card hooks, cancellation, partial imports, and service sharing with Agent tools. Legacy browser BLE tests remain as historical regressions. Run `npm test`; see [local checks](CONTRIBUTING.md#local-checks-without-hardware) for limits.
+
+Click the recorder icon to reconnect the saved card, or scan on first use. One discovered card connects automatically; multiple cards require a choice in the conversation. Gray means disconnected, pulsing means connecting, and green means Host-confirmed BLE connection. Click again while connecting to cancel. Connection success sends a guidance request to the current conversation without changing the composer draft. Use conversation commands for listing, first-file import and optional transcription. Right-click or Shift+F10 exposes disconnect and switch-device actions. No settings form expands in the toolbar. Cloud transcription fallback uploads audio and requires explicit transcription intent.
+
 ## Development requirements
 
-- A DSH environment exposing plugin development capabilities; supported versions/profiles are not established yet.
+**Unreleased slow-link fixes:** the workspace passes `cliTimeoutMs` through to both Python paths, adapts import idle tolerance within 12–20 seconds, records frame-interval statistics and checks local disconnect plus bounded re-advertising after interrupted transfers. For a 10-minute Python operation budget, configure `cliTimeoutMs: 610000` (10 seconds reserved for startup/cleanup). These changes have offline coverage only, do not speed up BLE, and do not add automatic batch recovery or byte resume. See [scope and remaining evidence](docs/import-recovery.md#slow-link-fixes).
+
+- A DSH environment exposing plugin development capabilities. The recorded baseline is Windows DSH Desktop 0.2.0-rc.2; other versions/profiles need verification.
 - For the optional icon: DSH Client Gateway, sessions/conversation services and the conversation input-left Slot. Bluetooth hardware and permission are required on the Host.
 - Node.js for syntax checks; the minimum version remains to be established with the target DSH runtime.
 - For the Host CLI main path: Python 3.11+ and Bleak/requests. Pinned scripts and requirements are shipped under `vendor/upstream/tools/`.
@@ -126,6 +132,8 @@ Keep audio, transcripts, device addresses, and credentials out of version contro
 For AI-assisted collaboration, start with [AGENTS.md](AGENTS.md) and the [developer](docs/roles/open-source-developer.md) or [QA](docs/roles/qa.md) role. These documents are shared across tools; `.cursor/rules/` is an optional Cursor adapter. See [role setup](CONTRIBUTING.md#development-and-qa-roles) for explicit loading instructions when a tool does not discover the entry point automatically.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md). Keep this README and [README.zh.md](README.zh.md) aligned when behavior or status changes. Completed changes belong in [CHANGELOG.md](CHANGELOG.md); future work belongs in [ROADMAP.md](ROADMAP.md).
+
+Maintainers preparing directory submissions or community posts can use the [discovery and promotion checklist](docs/discovery-and-promotion.md) (Chinese).
 
 ## License and related projects
 

@@ -66,7 +66,7 @@ M2a 后续固定了 CLI/规范参考 commit `de42d1fbf19fc92064ac4688f71f42730c8
 | `dataDir` | Host 用户目录 `~/.dsh-recorder-card` | 用户数据、设备缓存与可选 ASR `.env`；不能位于 CLI 源码目录内 |
 | `deviceAddress` | 无 | 高级回退地址；图标或 recorder_connect 自动发现并保存设备后无需手工配置。一次性设备调用仍需要已保存/配置的地址 |
 | `outDir` | `archive/audio` | `importFirst()` 的默认输出参数；相对路径以 `dataDir` 为基准，调用前转为绝对路径 |
-| `cliTimeoutMs` | `190000` | Host 子进程运行时限，正整数毫秒；不改变适配器自身的 180 秒异步设备时限 |
+| `cliTimeoutMs` | `190000` | Host 看门狗，正整数毫秒，不含排队。工作区同时向 adapter/worker 传入操作预算 `(cliTimeoutMs - min(10000, cliTimeoutMs / 2)) / 1000` 秒，剩余用于启动/清理；0.5.0 仍固定 Python 180 秒 |
 | `transcriptionProvider` | `dsh` | 使用 Host 的 speechToText；仅服务缺席回退 doubao，也可显式选 doubao |
 
 当前 `transcribe()` 由 [归档管线](../runtime/transcription.js) 处理：校验完整的标准头 16 kHz 单声道 PCM16 WAV（最大 64 MiB，识别器可有更小限制），计算指纹，调用 `speechToText.resolve({ audio })` 后 `transcribe(spec, signal)`。服务通过可选注入获取，不阻止设备工具加载；仅服务不存在时回退豆包。服务存在但未准备、选择错误、识别失败或取消均不回退。DSH 可使用本机 SenseVoice，并不等于 DeepSeek 云 API。

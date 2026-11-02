@@ -35,7 +35,7 @@ export const Config = z.object({
   deviceAddress: z.string().description("Initial device identifier. The card's saved selection overrides this fallback immediately; scan and transcribe need no address."),
   dataDir: z.string().description("Writable data directory; defaults to ~/.dsh-recorder-card on the Host. Contains audio, corpus, device cache and optional .env."),
   outDir: z.string().default("archive/audio").description("Import directory, relative to dataDir or absolute; never inside CLI sources."),
-  cliTimeoutMs: z.number().min(1).max(2147483647).step(1).default(190000).description("CLI execution timeout in milliseconds, excluding queue time."),
+  cliTimeoutMs: z.number().min(1).max(2147483647).step(1).default(190000).description("Host watchdog in milliseconds, excluding queue time. BLE operation budget is this value minus up to 10 seconds reserved for startup/cleanup; applies to both CLI and persistent worker."),
   transcriptionProvider: z.union(["dsh", "doubao"]).default("dsh").description("Use DSH speechToText. Only absence of that service falls back to Doubao cloud ASR; readiness/inference failures never fall back."),
 });
 
