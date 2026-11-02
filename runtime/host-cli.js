@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createConnection } from "./connection.js";
 import { createRecorderContract } from "./remote-contract.js";
 
-const { parseDiagnostics } = createRecorderContract();
+const { parseDiagnostics, parsePreflight } = createRecorderContract();
 
 const DEFAULT_TIMEOUT_MS = 190_000; // Adapter: 180 seconds + disconnect/startup allowance.
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -383,8 +383,33 @@ export function createRecorderService(config = {}, { execute = runProcess, openC
       if (filename !== undefined && (typeof filename !== "string" || !filename || filename !== filename.trim() || /[\x00-\x1f/\\,]/.test(filename))) {
         throw new TypeError("filename must be one exact name from recorder_list, without paths or commas");
       }
-      if (connecting) await connecting;
       if (typeof transcribeFlag !== "boolean") throw new TypeError("transcribeFlag must be boolean");
+      if (lifetime.signal.aborted || options?.signal?.aborted) {
+        const error = Object.assign(cancelled(), { diagnostics: { version: 1, operation: "import", phase: "queued", outcome: "cancelled",
+          elapsedMs: 0, queueMs: 0, bytesReceived: 0, dataFrames: 0, attempts: 0, cleanup: "not-needed" } });
+        await observe(error);
+        throw error;
+      }
+      if (options?.preflight !== undefined) {
+        const { expectedBytes, bytesPerSecond } = parsePreflight(options.preflight);
+        // Opt-in estimate only. List size is compressed storage, and the list's
+        // time field is not a verified duration. Never infer either input here.
+        const transferSeconds = expectedBytes / bytesPerSecond;
+        const requiredSeconds = Math.ceil(transferSeconds * 1.25 + 15);
+        if (requiredSeconds > operationSeconds) {
+          const suggestedMs = requiredSeconds * 1000 + 10000;
+          const advice = suggestedMs <= 2_147_483_647
+            ? `Suggested cliTimeoutMs: ${suggestedMs} (including the Host cleanup reserve).`
+            : "This estimate exceeds the maximum configurable Host timeout; select a smaller recording or remeasure the link.";
+          const error = failure("ImportBudgetError", `Import not started: estimated ${expectedBytes} B at ${bytesPerSecond} B/s needs about ${Math.ceil(transferSeconds)} s for transfer, or ${requiredSeconds} s with 25% margin and 15 s setup allowance; Python operation budget is ${operationSeconds} s (Host cliTimeoutMs ${timeoutMs}). ${advice} These are caller-supplied estimates, not a device limit or completion guarantee. Confirm the estimate before changing configuration; do not silently retry without preflight.`, {
+            diagnostics: { version: 1, operation: "import", phase: "queued", outcome: "failed", elapsedMs: 0,
+              queueMs: 0, bytesReceived: 0, dataFrames: 0, attempts: 0, cleanup: "not-needed" },
+          });
+          await observe(error);
+          throw error;
+        }
+      }
+      if (connecting) await connecting;
       const destination = outsideSource(resolve(dataDir, text(outDir, "outDir")));
       if (connection && !transcribeFlag) return importOutcome(await connectedCall(filename === undefined ? "importFirst" : "importFile",
         { outDir: destination, ...(filename === undefined ? {} : { filename }) }, options), destination, false);

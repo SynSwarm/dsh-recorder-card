@@ -47,6 +47,8 @@ The current workspace build registers the tools below; older published builds ma
 
 ## First-time setup and CLI workflow
 
+For long imports, optional `preflight: { expectedBytes, bytesPerSecond }` can reject an estimated over-budget transfer before any import BLE call. Use estimates whose provenance the user has confirmed for the selected recording/link. Card-list size is compressed storage and `durationOrTime` is not a verified seconds field; never convert either to WAV bytes automatically. On `RECORDER_IMPORT_BUDGET_EXCEEDED`, explain the estimate and suggested `cliTimeoutMs`; do not silently omit preflight or change configuration to retry. See [budget preflight](references/runtime.md#import-budget-preflight).
+
 Import diagnostics, when present, report observed phases/timing and data-frame/byte counts, not completion percentages or audio integrity. On errors preserve `failedPhase`, snapshot age and cleanup status; do not infer a physical disconnect from a timeout. DSH can hide diagnostics when cancelling a tool; the Host saves the latest diagnostic at `dataDir/recorder-diagnostics.json`. This file is replaced by later diagnosed operations, contains no audio or device identifiers, and does not justify an automatic retry. See [runtime diagnostics](references/runtime.md#transfer-diagnostics).
 
 No upstream clone or repoRoot configuration is required. Install Python 3.11+ and `python -m pip install bleak requests` on the Host. Use the same interpreter in the plugin `python` setting when it is not on PATH. Use the bundled adapter rather than running upstream scripts directly.

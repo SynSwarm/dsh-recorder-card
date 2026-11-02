@@ -108,6 +108,20 @@ The pinned importer still assembles frames and confirms completion. During that 
 
 After disconnect, the adapter checks the original client reference because upstream clears Session.client in finally. If a transfer was interrupted, normal Python cleanup additionally waits up to 3 seconds for the same address to advertise, all within the existing 5-second cleanup bound. A still-connected client, missing advertisement, scanner error or cleanup timeout stays unconfirmed; later no-op disconnects cannot erase that result. Missing advertising does not prove a live connection, and advertising does not prove GATT readiness. Wake or power-cycle as needed, then explicitly reconnect; do not continue a batch automatically while release/readiness is unconfirmed. Forced termination cannot execute this recovery check reliably. Duration-based hard rejection remains pending: `duration_or_time` is not yet a confirmed seconds field, and one measured transfer rate is not a safe universal bound.
 
+### Import budget preflight
+
+Unreleased, opt-in Host precheck: `recorder_import` and the `importFirst` / `importFile` Remote options accept `preflight: { expectedBytes, bytesPerSecond }`, both positive safe integers. Supply estimated exported audio bytes and a user-approved reference payload rate for the selected recording/link. Card-list size is compressed storage; the list time field is not a verified duration. No automatic conversion, speed learning or live speed probe is performed. Standalone Python CLI calls bypass this Host check.
+
+For a confirmed standard 44-byte-header, 16 kHz mono PCM16 output lasting 16 seconds, `44 + 16000 * 2 * 16 = 512044` bytes. This format/duration must be known for the selected recording. Example tool arguments:
+
+```json
+{"filename":"exact name from recorder_list","preflight":{"expectedBytes":512044,"bytesPerSecond":1000}}
+```
+
+Required operation time is `ceil(expectedBytes / bytesPerSecond * 1.25 + 15)` seconds: estimated transfer plus 25% margin and 15 seconds of setup allowance. These margins are policy, not measured overhead. Compare with `(cliTimeoutMs - min(10000, cliTimeoutMs / 2)) / 1000`, the Python budget for both import paths. The example needs 656 seconds versus the default 180, returns `RECORDER_IMPORT_BUDGET_EXCEEDED` (Remote `recorder/import-budget-exceeded`), and suggests `cliTimeoutMs: 666000`. If that suggestion exceeds the supported Host timeout range, the message asks for a smaller recording or a new link measurement instead.
+
+Rejection starts no import, preserves an existing persistent connection and leaves the queue usable; diagnostics show zero attempts and `cleanup: not-needed`. Passing is not a completion guarantee. Omitting preflight preserves existing behavior; after rejection, obtain an explicit recovery decision before changing estimates/configuration or omitting the check. No automatic retry, timeout adjustment, splitting or byte resume is added.
+
 ### Output paths
 
 Prefer explicit absolute input/output paths during verification. Audio defaults to `dataDir/archive/audio/`; transcription defaults to `dataDir/archive/corpus/`. Relative tool paths resolve under `dataDir`, never `repoRoot`. Python bytecode writing is disabled. Data paths inside CLI sources are rejected by the Host. Existing users: relative paths previously resolved under repoRoot. Old files are left untouched; use absolute audio paths or copy them to the new data directory. Do not set dataDir to the CLI source tree. No files are migrated automatically. Report the actual output path. A standalone CLI success does not prove DSH Agent tools or browser import are working.

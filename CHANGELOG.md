@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ## [Unreleased]
 
+Slow-link and cleanup fixes are recorded in `c348dba`; the user confirmed their QA passed on 2026-11-02. The optional budget preflight below was added afterward and awaits its own QA. All remain unpublished. See the [QA closure record](docs/import-recovery.md#qa-closure) for test results and hardware acceptance limits.
+
+- Add opt-in import budget preflight to Host, Agent and Remote: caller-supplied exported-byte and payload-rate estimates can reject before import dispatch and suggest a larger timeout. Keep current behavior without estimates; do not infer WAV bytes from compressed list size or claim automatic large-file detection.
+
 - Validate one-shot import cleanup before releasing the shared BLE queue, including missing, malformed and unsupported reports after process termination. Distinguish failures proven not to have started a process; otherwise notify queued callers of unconfirmed cleanup before dispatch, retaining saved-audio partial results and the original operation error.
 - Reorganize both READMEs around physical-recorder imports, hardware requirements, installation and evidence boundaries. Add source-linked discovery guidance, directory/community drafts and repository metadata; external submissions and npm metadata publication remain pending.
 - Propagate the Host BLE watchdog setting into both Python operation budgets with a cleanup reserve; classify Python deadlines as timeouts. Keep the default 180-second Python budget while allowing longer configured transfers.

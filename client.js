@@ -43,6 +43,14 @@ function createRecorderContract() {
     ...Object.fromEntries(metrics.map(key => [key, { type: "integer", ...(requiredMetrics.includes(key) ? { required: true } : {}) }])),
   } };
   const error = object({ code: nonempty, message: string });
+  const preflight = object({ expectedBytes: positive, bytesPerSecond: positive });
+  const preflightSchema = { type: "object", additionalProperties: false, properties: {
+    expectedBytes: { type: "integer", required: true,
+      description: "Positive safe integer: estimated exported audio bytes from known output format/duration or a validated measurement; NOT compressed card-list size." },
+    bytesPerSecond: { type: "integer", required: true,
+      description: "Positive safe integer: user-approved reference BLE payload bytes per second for this device/link; an estimate, not a guaranteed rate." },
+  } };
+  const importOptions = optional(object({ outDir: optional(nonempty), transcribe: optional(boolean), preflight: optional(preflight) }));
   const process = object({ code: integer, out: string, err: string, diagnostics: optional(diagnostics) });
   const device = object({ deviceAddress: string, source: oneOf("saved", "config", "none") });
   const connection = object({ status: oneOf("disconnected", "cleanup-unconfirmed", "connecting", "connected", "selection-required", "not-found"),
@@ -75,8 +83,8 @@ function createRecorderContract() {
     scan: [], status: [], list: [],
     connect: [parameter("address", optional(string), true)], disconnect: [], connectionState: [],
     record: [parameter("action", oneOf("state", "start", "pause", "resume", "save"))],
-    importFirst: [parameter("options", optional(object({ outDir: optional(nonempty), transcribe: optional(boolean) })), true)],
-    importFile: [parameter("filename", nonempty), parameter("options", optional(object({ outDir: optional(nonempty), transcribe: optional(boolean) })), true)],
+    importFirst: [parameter("options", importOptions, true)],
+    importFile: [parameter("filename", nonempty), parameter("options", importOptions, true)],
     transcribe: [parameter("file", nonempty), parameter("force", optional(boolean), true)],
     getDevice: [],
     saveDevice: [parameter("address", string)],
@@ -89,7 +97,8 @@ function createRecorderContract() {
       : method === "getDevice" || method === "saveDevice" ? codec("DeviceSettings", device)
       : codec(["importFirst", "importFile"].includes(method) ? "ImportResult" : "ProcessResult", ["importFirst", "importFile"].includes(method) ? imported : process),
   }));
-  return { package: "dsh-recorder-card", descriptors, parseDiagnostics: diagnostics, diagnosticsSchema };
+  return { package: "dsh-recorder-card", descriptors, parseDiagnostics: diagnostics, diagnosticsSchema,
+    parsePreflight: preflight, preflightSchema };
 }
 // END REMOTE CONTRACT
   const contribution = createRecorderContract();

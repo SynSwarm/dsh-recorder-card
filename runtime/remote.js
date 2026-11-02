@@ -8,6 +8,7 @@ const codes = {
   TypeError: "recorder/config-or-argument", CliSpawnError: "recorder/spawn-failed",
   CliExitError: "recorder/cli-failed", AbortError: "gateway/cancelled",
   TimeoutError: "recorder/timeout", OutputLimitError: "recorder/output-limit",
+  ImportBudgetError: "recorder/import-budget-exceeded",
   CleanupError: "recorder/cleanup-failed", ImportResultError: "recorder/import-result-invalid",
   SettingsError: "recorder/settings-failed",
   TranscriptionError: "recorder/transcription-failed",
@@ -43,10 +44,12 @@ export default class RecorderController extends TypertRemoteService {
       ? this.ctx.recorder.recordState({ signal }) : this.ctx.recorder.record(action, { signal }));
   }
   importFirst(options, signal) {
-    return call("importFirst", () => this.ctx.recorder.importFirst(options?.outDir, options?.transcribe, { signal }));
+    return call("importFirst", () => this.ctx.recorder.importFirst(options?.outDir, options?.transcribe,
+      { signal, ...(options?.preflight === undefined ? {} : { preflight: options.preflight }) }));
   }
   importFile(filename, options, signal) {
-    return call("importFile", () => this.ctx.recorder.importFile(filename, options?.outDir, options?.transcribe, { signal }));
+    return call("importFile", () => this.ctx.recorder.importFile(filename, options?.outDir, options?.transcribe,
+      { signal, ...(options?.preflight === undefined ? {} : { preflight: options.preflight }) }));
   }
   transcribe(file, force, signal) { return call("transcribe", () => this.ctx.recorder.transcribe(file, { force, signal })); }
 }

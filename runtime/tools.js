@@ -2,7 +2,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { createRecorderContract } from "./remote-contract.js";
 
-const { diagnosticsSchema, parseDiagnostics } = createRecorderContract();
+const { diagnosticsSchema, parseDiagnostics, preflightSchema } = createRecorderContract();
 
 // A successful CLI process is not an end-to-end device/import/transcription verdict.
 const processOutput = {
@@ -63,6 +63,7 @@ const errorCodes = {
   TypeError: "RECORDER_CONFIG_OR_ARGUMENT", CliSpawnError: "RECORDER_SPAWN_FAILED",
   CliExitError: "RECORDER_CLI_FAILED", AbortError: "RECORDER_ABORTED",
   TimeoutError: "RECORDER_TIMEOUT", OutputLimitError: "RECORDER_OUTPUT_LIMIT",
+  ImportBudgetError: "RECORDER_IMPORT_BUDGET_EXCEEDED",
   CleanupError: "RECORDER_CLEANUP_FAILED", ImportResultError: "RECORDER_IMPORT_RESULT_INVALID",
   SettingsError: "RECORDER_SETTINGS_FAILED",
   TranscriptionError: "RECORDER_TRANSCRIPTION_FAILED",
@@ -170,6 +171,7 @@ export function registerRecorderTools(ctx, service) {
     name: "recorder_import",
     description: "Import one recording by its exact filename from recorder_list; omit filename for the first recording. Reuses the persistent Host BLE session: do not disconnect or run an external CLI first. For multiple user-selected recordings, call sequentially and stop on a device/transfer error; reconnect and explicitly retry the failed file from the beginning, never assume byte resume. Optionally transcribe through DSH speechToText (only an absent service falls back to Doubao cloud ASR). Inspect status: partial means audio is saved but transcription failed or cleanup is unconfirmed; retry transcription only using the returned audio path.",
     parameters: {
+      preflight: { ...preflightSchema, description: "Optional opt-in budget precheck before any import BLE call. Supply both estimates with user-confirmed provenance; do not infer exported bytes from list size or durationOrTime. Over-budget estimates reject without importing; never silently drop this check on retry." },
       filename: { type: "string", description: "Exact on-card name returned by recorder_list, not a local path, stem or comma-separated list. Omit to import the first recording." },
       outDir: { type: "string", description: "Destination directory relative to dataDir; defaults to the configured outDir, or archive/audio." },
       transcribe: { type: "boolean", description: "Transcribe after import using the configured provider; defaults to false. Doubao cloud fallback requires credentials and uploads audio." },
@@ -177,8 +179,8 @@ export function registerRecorderTools(ctx, service) {
     output: importOutput,
     async execute(args, exec) {
       return executeOperation("import", () => args.filename === undefined
-        ? service.importFirst(args.outDir, args.transcribe === true, { signal: exec.signal })
-        : service.importFile(args.filename, args.outDir, args.transcribe === true, { signal: exec.signal }));
+        ? service.importFirst(args.outDir, args.transcribe === true, { signal: exec.signal, ...(args.preflight === undefined ? {} : { preflight: args.preflight }) })
+        : service.importFile(args.filename, args.outDir, args.transcribe === true, { signal: exec.signal, ...(args.preflight === undefined ? {} : { preflight: args.preflight }) }));
     },
     presentCall: (args) => ({ card: "generic", title: "Import recorder card recording", kind: "other", rawInput: args }),
   }));
